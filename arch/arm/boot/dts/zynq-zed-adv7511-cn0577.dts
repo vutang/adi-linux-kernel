@@ -87,6 +87,6 @@
 		pwm-names = "cnv", "clk_en";
 		vref-supply = <&vref>;
 
-		adi,use-two-lanes;
+		adi,use-one-lane;
 	};
 };
