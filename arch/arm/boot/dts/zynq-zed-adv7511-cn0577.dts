@@ -88,5 +88,6 @@
 		vref-supply = <&vref>;
 
 		adi,use-one-lane;
+		// adi,use-two-lanes;
 	};
 };
