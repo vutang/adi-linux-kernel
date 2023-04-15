@@ -37,6 +37,12 @@ static const struct spi_device_id st_lsm9ds0_id_table[] = {
 };
 MODULE_DEVICE_TABLE(spi, st_lsm9ds0_id_table);
 
+static const struct acpi_device_id st_lsm9ds0_acpi_match[] = {
+	{"ACCL0001", (kernel_ulong_t)LSM303D_IMU_DEV_NAME},
+	{ },
+};
+MODULE_DEVICE_TABLE(acpi, st_lsm9ds0_acpi_match);
+
 static const struct regmap_config st_lsm9ds0_regmap_config = {
 	.reg_bits	= 8,
 	.val_bits	= 8,
@@ -72,6 +78,7 @@ static struct spi_driver st_lsm9ds0_driver = {
 	.driver = {
 		.name = "st-lsm9ds0-spi",
 		.of_match_table = st_lsm9ds0_of_match,
+		.acpi_match_table = st_lsm9ds0_acpi_match,
 	},
 	.probe = st_lsm9ds0_spi_probe,
 	.id_table = st_lsm9ds0_id_table,
