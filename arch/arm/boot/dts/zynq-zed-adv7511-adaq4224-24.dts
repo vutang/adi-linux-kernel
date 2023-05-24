@@ -48,20 +48,56 @@
 		};
 	};
 	
-	i2c {
-		#address-cells = <1>;
-		#size-cells = <0>;
-		status = "okay";
-		
-		max31827: max31827@5f {
-			compatible = "adi,max31827";
-			reg = <0x5f>;
-			vref-supply = <&vio>;
+    mux_control@0 {
+        compatible = "adi,one-bit-adc-dac";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        out-gpios = <&gpio0 87 0>,
+            <&gpio0 88 0>,
+            <&gpio0 89 0>,
+            <&gpio0 90 0>;
+
+        channel@0 {
+            reg = <0>;
+            label = "RST";
+        };
+        
+        channel@1 {
+            reg = <1>;
+            label = "EN";
+        };
+
+        channel@2 {
+            reg = <2>;
+            label = "MUX_A0";
+        };
+        channel@3 {
+            reg = <3>;
+            label = "MUX_A1";
         };
     };
 };
 
 &fpga_axi {
+    i2c@44c00000 {
+        compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
+        reg = <0x44c00000 0x10000>;
+        interrupt-parent = <&intc>;
+        interrupts = <0 54 IRQ_TYPE_LEVEL_HIGH>;
+        clocks = <&clkc 15>;
+        clock-names = "pclk";
+
+        #size-cells = <0>;
+        #address-cells = <1>;
+
+        max31827: max31827@5f {
+            compatible = "adi,max31827";
+            reg = <0x5f>;
+            vref-supply = <&vio>;
+        };
+
+    };
 	rx_dma: rx-dmac@44a30000 {
 		compatible = "adi,axi-dmac-1.00.a";
 		reg = <0x44a30000 0x1000>;
@@ -124,8 +160,8 @@
 			reset-gpios = <&gpio0 86 GPIO_ACTIVE_LOW>;
 			
 			adi,lane-mode = <1>;
-		        adi,clock-mode = <0>;
-            		adi,out-data-mode = <0>;	
+		    adi,clock-mode = <0>;
+            adi,out-data-mode = <0>;	
 			adi,spi-trigger;
 			
 			clocks = <&cnv_ext_clk>;
