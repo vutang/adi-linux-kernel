@@ -53,27 +53,15 @@
         #address-cells = <1>;
         #size-cells = <0>;
 
-        in-gpios = <&gpio0 87 GPIO_ACTIVE_LOW>;
-        out-gpios = <&gpio0 88 GPIO_ACTIVE_HIGH>,
-            <&gpio0 89 GPIO_ACTIVE_HIGH>,
-            <&gpio0 90 GPIO_ACTIVE_HIGH>;
+        out-gpios = <&gpio0 87 GPIO_ACTIVE_HIGH>,
+            <&gpio0 88 GPIO_ACTIVE_HIGH>;
 
         channel@0 {
             reg = <0>;
-            label = "RST";
-        };
-        
-        channel@1 {
-            reg = <1>;
-            label = "EN";
-        };
-
-        channel@2 {
-            reg = <2>;
             label = "MUX_A0";
         };
-        channel@3 {
-            reg = <3>;
+        channel@1 {
+            reg = <1>;
             label = "MUX_A1";
         };
     };
