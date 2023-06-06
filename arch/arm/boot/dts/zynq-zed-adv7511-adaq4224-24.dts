@@ -148,7 +148,7 @@
 			reset-gpios = <&gpio0 86 GPIO_ACTIVE_LOW>;
 			
 			adi,lane-mode = <1>;
-		    adi,clock-mode = <0>;
+		    adi,clock-mode = <1>;
             adi,out-data-mode = <0>;	
 			adi,spi-trigger;
 			
