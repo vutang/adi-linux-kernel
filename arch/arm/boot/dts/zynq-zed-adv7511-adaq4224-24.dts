@@ -150,6 +150,7 @@
 			adi,lane-mode = <1>;
 		    adi,clock-mode = <1>;
             adi,out-data-mode = <0>;	
+            adi,dual-data-rate;
 			adi,spi-trigger;
 			
 			clocks = <&cnv_ext_clk>;
