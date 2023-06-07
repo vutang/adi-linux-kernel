@@ -1334,7 +1334,8 @@ static int ad4630_probe(struct spi_device *spi)
 							       GPIOD_OUT_LOW);
 
 		if (IS_ERR(st->pgia_gpios))
-			return PTR_ERR(st->pgia_gpios);
+			dev_err_probe(&spi->dev, PTR_ERR(st->pgia_gpios),
+				      "Failed to get PGIA GPIOs\n");
 	}
 
 	ret = ad4630_reset(st);
