@@ -1371,11 +1371,14 @@ static int ad4630_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	st->pgia_gpios = devm_gpiod_get_array_optional(&spi->dev, "adi,pgia",
-						       GPIOD_OUT_LOW);
+	if (st->chip->has_pgia) {
+		st->pgia_gpios = devm_gpiod_get_array_optional(&spi->dev,
+							       "adi,pgia",
+							       GPIOD_OUT_LOW);
 
-	if (IS_ERR(st->pgia_gpios))
-		return PTR_ERR(st->pgia_gpios);
+		if (IS_ERR(st->pgia_gpios))
+			return PTR_ERR(st->pgia_gpios);
+	}
 
 	ret = ad4630_reset(st);
 	if (ret)
