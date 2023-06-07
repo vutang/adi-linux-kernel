@@ -404,15 +404,15 @@ static int ad4630_set_chan_offset(struct iio_dev *indio_dev, int ch, int offset)
 }
 
 static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_int,
-				int gain_frac)
+				int gain_fract)
 {
 	struct ad4630_state *st = iio_priv(indio_dev);
 	int ret, gain_idx, a0, a1;
 
 	DECLARE_BITMAP(values, 3);
 
-	gain_idx = find_closest(gain_int + (gain_frac * 1000000) * 1000,
-				ad4630_gains, 4);
+	gain_idx = find_closest(gain_int * 1000 + gain_fract / 1000,
+				ad4630_gains, ARRAY_SIZE(ad4630_gains));
 
 	/* Set appropriate status for A0, A1 pins according to requested gain */
 	a0 = gain_idx % 2;
