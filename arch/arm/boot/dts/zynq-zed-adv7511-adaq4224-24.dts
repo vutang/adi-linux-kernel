@@ -47,24 +47,6 @@
 			clock-output-names = "cnv_ext_clk";
 		};
 	};
-	
-    mux_control@0 {
-        compatible = "adi,one-bit-adc-dac";
-        #address-cells = <1>;
-        #size-cells = <0>;
-
-        out-gpios = <&gpio0 87 GPIO_ACTIVE_HIGH>,
-            <&gpio0 88 GPIO_ACTIVE_HIGH>;
-
-        channel@0 {
-            reg = <0>;
-            label = "MUX_A0";
-        };
-        channel@1 {
-            reg = <1>;
-            label = "MUX_A1";
-        };
-    };
 };
 
 &fpga_axi {
@@ -146,13 +128,12 @@
 			vref-supply = <&vref>;
 			spi-max-frequency = <80000000>;
 			reset-gpios = <&gpio0 86 GPIO_ACTIVE_LOW>;
-			adi,pgia-gpios = <&gpio0 89 GPIO_ACTIVE_HIGH>,
-				<&gpio0 90 GPIO_ACTIVE_HIGH>;
-			
+			adi,pgia-gpios = <&gpio0 87 GPIO_ACTIVE_HIGH>,
+					 <&gpio0 88 GPIO_ACTIVE_HIGH>;
 			adi,lane-mode = <1>;
-		    adi,clock-mode = <1>;
-            adi,out-data-mode = <0>;	
-            adi,dual-data-rate;
+			adi,clock-mode = <1>;
+			adi,out-data-mode = <0>;
+			adi,dual-data-rate;
 			adi,spi-trigger;
 			
 			clocks = <&cnv_ext_clk>;
