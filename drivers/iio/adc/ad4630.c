@@ -882,8 +882,8 @@ static const struct ad4630_chip_info ad4630_chip_info[] = {
 		.n_channels = 2,
 	},
 	[ID_ADAQ4224] = {
-		.available_masks = ad4630_channel_masks,
-		.modes = ad4630_24_modes,
+		.available_masks = ad4030_channel_masks,
+		.modes = ad4030_24_modes,
 		.out_modes_mask = GENMASK(3, 0),
 		.name = "adaq4224",
 		.grade = 0x10,
