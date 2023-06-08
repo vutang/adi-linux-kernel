@@ -131,8 +131,11 @@ enum {
 	ID_ADAQ4224,
 };
 
-static const char *ad4630_gain[4] = {
-	"0.33", "0.56", "2.22", "6.67"
+/*
+ * Gains computed as fractions of 1000 so they can be expressed by integers.
+ */
+static const int ad4630_gains[4] = {
+	330, 560, 2220, 6670
 };
 
 struct ad4630_out_mode {
@@ -291,6 +294,8 @@ static int ad4630_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = (st->vref * 2) / 1000;
+		if (st->chip->has_pgia)
+			*val = *val * ad4630_gains[st->pgia_idx] / 1000;
 		*val2 = chan->scan_type.realbits;
 		return IIO_VAL_FRACTIONAL_LOG2;
 	case IIO_CHAN_INFO_CALIBSCALE:
@@ -398,21 +403,30 @@ static int ad4630_set_chan_offset(struct iio_dev *indio_dev, int ch, int offset)
 	return ret;
 }
 
-static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_idx)
+static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_int,
+				int gain_fract)
 {
-	const struct ad4630_state *st = iio_priv(indio_dev);
-	int a0, a1;
+	struct ad4630_state *st = iio_priv(indio_dev);
+	int ret, gain_idx, a0, a1;
 
 	DECLARE_BITMAP(values, 3);
+
+	gain_idx = find_closest(gain_int * 1000 + gain_fract / 1000,
+				ad4630_gains, ARRAY_SIZE(ad4630_gains));
 
 	/* Set appropriate status for A0, A1 pins according to requested gain */
 	a0 = gain_idx % 2;
 	a1 = gain_idx / 2;
 	values[0] = (a1 << 1) | a0;
 
-	return gpiod_set_array_value_cansleep(ARRAY_SIZE(values),
-					      st->pgia_gpios->desc,
-					      st->pgia_gpios->info, values);
+	ret = gpiod_set_array_value_cansleep(ARRAY_SIZE(values),
+					     st->pgia_gpios->desc,
+					     st->pgia_gpios->info, values);
+
+	if (!ret)
+		st->pgia_idx = gain_idx;
+
+	return ret;
 }
 
 static int ad4630_set_chan_gain(struct iio_dev *indio_dev, int ch,
@@ -441,79 +455,20 @@ static int ad4630_set_chan_gain(struct iio_dev *indio_dev, int ch,
 	return ret;
 }
 
-static ssize_t ad4630_show(struct device *dev,
-			   struct device_attribute *attr,
-			   char *buf)
+static ssize_t in_voltage_scale_available_show(struct device *dev,
+					       struct device_attribute *attr,
+					       char *buf)
 {
-	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad4630_state *st = iio_priv(indio_dev);
-	int ret = 0, len = 0;
+	int len = 0;
 
-	switch ((u32)this_attr->address) {
-	case AD4630_IN_PGA_GAIN:
-		len = sprintf(buf, "%s\n", ad4630_gain[st->pgia_idx]);
-		break;
-	case AD4630_IN_PGA_GAIN_AVAIL:
-		len = sprintf(buf, "0.33 0.56 2.22 6.67\n");
-		break;
-	default:
-		ret = -EINVAL;
-	}
-	return ret ? ret : len;
+	len = sprintf(buf, "0.33 0.56 2.22 6.67\n");
+	return len;
 }
 
-static ssize_t ad4630_store(struct device *dev,
-			    struct device_attribute *attr,
-			    const char *buf,
-			    size_t len)
-{
-	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad4630_state *st = iio_priv(indio_dev);
-	//int gain_int, gain_frac;
-	int gain_idx = 0;
-	int ret = 0;
-
-	switch ((u32)this_attr->address) {
-	case AD4630_IN_PGA_GAIN:
-		if (sysfs_streq(buf, "0.33")) {
-			gain_idx = 0;
-		} else if (sysfs_streq(buf, "0.56")) {
-			gain_idx = 1;
-		} else if (sysfs_streq(buf, "2.22")) {
-			gain_idx = 2;
-			break;
-		} else if (sysfs_streq(buf, "6.67")) {
-			gain_idx = 3;
-		} else {
-			ret = -EINVAL;
-			break;
-		}
-
-		ret = ad4630_set_pgia_gain(indio_dev, gain_idx);
-		if (!ret)
-			st->pgia_idx = gain_idx;
-		break;
-	default:
-		ret = -EINVAL;
-	}
-	return ret ? ret : len;
-}
-
-static IIO_DEVICE_ATTR(in_voltage0_hardwaregain, 0644,
-			ad4630_show,
-			ad4630_store,
-			AD4630_IN_PGA_GAIN);
-
-static IIO_DEVICE_ATTR(in_voltage0_hardwaregain_available, 0444,
-			ad4630_show,
-			NULL,
-			AD4630_IN_PGA_GAIN_AVAIL);
+static IIO_DEVICE_ATTR_RO(in_voltage_scale_available, 0);
 
 static struct attribute *ad4630_attributes[] = {
-	&iio_dev_attr_in_voltage0_hardwaregain.dev_attr.attr,
-	&iio_dev_attr_in_voltage0_hardwaregain_available.dev_attr.attr,
+	&iio_dev_attr_in_voltage_scale_available.dev_attr.attr,
 	NULL
 };
 
@@ -528,6 +483,8 @@ static int ad4630_write_raw(struct iio_dev *indio_dev,
 	switch (info) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		return ad4630_set_sampling_freq(indio_dev, val);
+	case IIO_CHAN_INFO_SCALE:
+		return ad4630_set_pgia_gain(indio_dev, val, val2);
 	case IIO_CHAN_INFO_CALIBSCALE:
 		return ad4630_set_chan_gain(indio_dev, chan->channel, val,
 					    val2);
@@ -1371,11 +1328,15 @@ static int ad4630_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	st->pgia_gpios = devm_gpiod_get_array_optional(&spi->dev, "adi,pgia",
-						       GPIOD_OUT_LOW);
+	if (st->chip->has_pgia) {
+		st->pgia_gpios = devm_gpiod_get_array_optional(&spi->dev,
+							       "adi,pgia",
+							       GPIOD_OUT_LOW);
 
-	if (IS_ERR(st->pgia_gpios))
-		return PTR_ERR(st->pgia_gpios);
+		if (IS_ERR(st->pgia_gpios))
+			dev_err_probe(&spi->dev, PTR_ERR(st->pgia_gpios),
+				      "Failed to get PGIA GPIOs\n");
+	}
 
 	ret = ad4630_reset(st);
 	if (ret)
