@@ -407,21 +407,41 @@ static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_int,
 				int gain_fract)
 {
 	struct ad4630_state *st = iio_priv(indio_dev);
-	int ret, gain_idx, a0, a1;
+	int ret, gain_idx, n_mux_pins = 2;
 
-	DECLARE_BITMAP(values, 3);
+	unsigned long *values = bitmap_alloc(n_mux_pins, GFP_KERNEL);
+	if(!values)
+		return -ENOMEM;
 
 	gain_idx = find_closest(gain_int * 1000 + gain_fract / 1000,
 				ad4630_gains, ARRAY_SIZE(ad4630_gains));
 
 	/* Set appropriate status for A0, A1 pins according to requested gain */
-	a0 = gain_idx % 2;
-	a1 = gain_idx / 2;
-	values[0] = (a1 << 1) | a0;
+	switch (gain_idx)
+	{
+	case 0:
+		bitmap_zero(values, n_mux_pins); /* Clear MUX_A0 and MUX_A1 pins */
+		break;
+	case 1:
+		bitmap_set(values, 0, 1);        /* Set MUX_A0 pin */
+		bitmap_clear(values, 1, 1);      /* Clear MUX_A1 pin */
+		break;
+	case 2:
+		bitmap_clear(values, 0, 1);      /* Clear MUX_A0 pin */
+		bitmap_set(values, 1, 1);        /* Set MUX_A1 pin */
+		break;
+	case 3:
+		bitmap_fill(values, n_mux_pins); /* Set MUX_A0 and MUX_A1 pins */
+		break;
+	default:
+		return -EINVAL;
+	}
 
-	ret = gpiod_set_array_value_cansleep(ARRAY_SIZE(values),
+	ret = gpiod_set_array_value_cansleep(n_mux_pins,
 					     st->pgia_gpios->desc,
 					     st->pgia_gpios->info, values);
+
+	bitmap_free(values);
 
 	if (!ret)
 		st->pgia_idx = gain_idx;
