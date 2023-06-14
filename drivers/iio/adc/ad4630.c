@@ -443,6 +443,9 @@ static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_int,
 
 	bitmap_free(values);
 
+	if (ret)
+		dev_info(&st->spi->dev, "Error on gpiod set: %d\n", ret);
+
 	if (!ret)
 		st->pgia_idx = gain_idx;
 
