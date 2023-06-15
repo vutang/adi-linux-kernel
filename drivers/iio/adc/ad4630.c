@@ -1359,6 +1359,8 @@ static int ad4630_probe(struct spi_device *spi)
 		if (IS_ERR(st->pgia_gpios))
 			dev_err_probe(&spi->dev, PTR_ERR(st->pgia_gpios),
 				      "Failed to get PGIA GPIOs\n");
+
+		ad4630_set_pgia_gain(indio_dev, 0, 330000)
 	}
 
 	ret = ad4630_reset(st);
@@ -1374,12 +1376,11 @@ static int ad4630_probe(struct spi_device *spi)
 		return ret;
 
 	indio_dev->name = st->chip->name;
-	if (st->chip->has_pgia) {
+	if (st->chip->has_pgia)
 		indio_dev->info = &adaq4224_info;
-		st->pgia_idx = 0;
-	} else {
+	else
 		indio_dev->info = &ad4630_info;
-	}
+
 	indio_dev->channels = st->chip->modes[st->out_data].channels;
 	indio_dev->num_channels = st->chip->n_channels;
 	indio_dev->modes = INDIO_BUFFER_HARDWARE;
