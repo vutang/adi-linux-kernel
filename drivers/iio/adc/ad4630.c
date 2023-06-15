@@ -1360,7 +1360,7 @@ static int ad4630_probe(struct spi_device *spi)
 			dev_err_probe(&spi->dev, PTR_ERR(st->pgia_gpios),
 				      "Failed to get PGIA GPIOs\n");
 
-		ad4630_set_pgia_gain(indio_dev, 0, 330000)
+		ad4630_set_pgia_gain(indio_dev, 0, 330000);
 	}
 
 	ret = ad4630_reset(st);
