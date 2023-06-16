@@ -83,6 +83,7 @@
 /* HARDWARE_GAIN */
 #define AD4630_REG_CHAN_GAIN(ch)	(AD4630_REG_GAIN_X0_MSB + 2 * (ch))
 #define AD4630_GAIN_MAX			1999970
+#define ADAQ4224_GAIN_MAX		6670000000
 /* POWER MODE*/
 #define AD4630_POWER_MODE_MSK		GENMASK(1, 0)
 #define AD4630_LOW_POWER_MODE		3
@@ -403,18 +404,32 @@ static int ad4630_set_chan_offset(struct iio_dev *indio_dev, int ch, int offset)
 	return ret;
 }
 
-static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_int,
-				int gain_fract)
+static int ad4630_calc_pgia_gain(int gain_int, int gain_fract, int vref,
+				 int precision)
+{
+	int gain_idx;
+	u64 gain;
+
+	gain = gain_int * 1000000000 + gain_fract;
+
+	if (gain < 0 || gain > ADAQ4224_GAIN_MAX)
+		return -EINVAL;
+
+	gain = DIV_ROUND_CLOSEST_ULL(gain << precision, 1000000000);
+	gain = DIV_ROUND_CLOSEST_ULL(gain, (vref / 1000000) * 2);
+	gain_idx = find_closest(gain, ad4630_gains, ARRAY_SIZE(ad4630_gains));
+
+	return gain_idx;
+}
+
+static int ad4630_set_pgia_gain(struct iio_dev *indio_dev, int gain_idx)
 {
 	struct ad4630_state *st = iio_priv(indio_dev);
-	int ret, gain_idx, n_mux_pins = 2;
+	int ret, n_mux_pins = 2;
 
 	unsigned long *values = bitmap_alloc(n_mux_pins, GFP_KERNEL);
 	if(!values)
 		return -ENOMEM;
-
-	gain_idx = find_closest(gain_int * 1000 + gain_fract / 1000,
-				ad4630_gains, ARRAY_SIZE(ad4630_gains));
 
 	/* Set appropriate status for A0, A1 pins according to requested gain */
 	switch (gain_idx)
@@ -482,9 +497,28 @@ static ssize_t in_voltage_scale_available_show(struct device *dev,
 					       struct device_attribute *attr,
 					       char *buf)
 {
-	int len = 0;
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct ad4630_state *st = iio_priv(indio_dev);
+	int i, len = 0;
+	int val, val2;
+	int tmp0, tmp1;
+	s64 tmp2;
 
-	len = sprintf(buf, "0.33 0.56 2.22 6.67\n");
+	val2 = st->chip->base_word_len;
+
+	for (i = 0; i < ARRAY_SIZE(ad4630_gains); i++) {
+		val = (st->vref * 2) / 1000;
+		if (st->chip->has_pgia)
+			val = val * ad4630_gains[i] / 1000;
+
+		tmp2 = shift_right((s64)val * 1000000000LL, val2);
+		tmp0 = (int)div_s64_rem(tmp2, 1000000000LL, &tmp1);
+
+		len += scnprintf(buf + len, PAGE_SIZE - len,
+			"%d.%09u ", tmp0, abs(tmp1));
+	}
+	buf[len - 1] = '\n';
+
 	return len;
 }
 
@@ -499,15 +533,34 @@ static const struct attribute_group ad4630_attribute_group = {
 	.attrs = ad4630_attributes,
 };
 
+static int adaq4224_write_raw_get_fmt(struct iio_dev *indio_dev,
+				      struct iio_chan_spec const *chan,
+				      long mask)
+{
+	switch (mask) {
+	case IIO_CHAN_INFO_SCALE:
+		return IIO_VAL_INT_PLUS_NANO;
+	default:
+		return IIO_VAL_INT_PLUS_MICRO;
+	}
+
+	return -EINVAL;
+}
+
 static int ad4630_write_raw(struct iio_dev *indio_dev,
 			    struct iio_chan_spec const *chan, int val,
 			    int val2, long info)
 {
+	struct ad4630_state *st = iio_priv(indio_dev);
+	int gain_idx;
+
 	switch (info) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		return ad4630_set_sampling_freq(indio_dev, val);
 	case IIO_CHAN_INFO_SCALE:
-		return ad4630_set_pgia_gain(indio_dev, val, val2);
+		gain_idx = ad4630_calc_pgia_gain(val, val2, st->vref,
+						 chan->scan_type.realbits);
+		return ad4630_set_pgia_gain(indio_dev, gain_idx);
 	case IIO_CHAN_INFO_CALIBSCALE:
 		return ad4630_set_chan_gain(indio_dev, chan->channel, val,
 					    val2);
@@ -1181,6 +1234,7 @@ static const struct iio_info ad4630_info = {
 static const struct iio_info adaq4224_info = {
 	.read_raw = &ad4630_read_raw,
 	.write_raw = &ad4630_write_raw,
+	.write_raw_get_fmt = &adaq4224_write_raw_get_fmt,
 	.debugfs_reg_access = &ad4630_reg_access,
 	.attrs = &ad4630_attribute_group,
 };
@@ -1360,7 +1414,7 @@ static int ad4630_probe(struct spi_device *spi)
 			dev_err_probe(&spi->dev, PTR_ERR(st->pgia_gpios),
 				      "Failed to get PGIA GPIOs\n");
 
-		ad4630_set_pgia_gain(indio_dev, 0, 330000);
+		ad4630_set_pgia_gain(indio_dev, 0);
 	}
 
 	ret = ad4630_reset(st);
