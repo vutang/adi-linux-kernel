@@ -50,24 +50,23 @@
 };
 
 &fpga_axi {
-    i2c@44c00000 {
-        compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
-        reg = <0x44c00000 0x10000>;
-        interrupt-parent = <&intc>;
-        interrupts = <0 54 IRQ_TYPE_LEVEL_HIGH>;
-        clocks = <&clkc 15>;
-        clock-names = "pclk";
+	i2c@44c00000 {
+		compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
+		reg = <0x44c00000 0x10000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 54 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15>;
+		clock-names = "pclk";
 
-        #size-cells = <0>;
-        #address-cells = <1>;
+		#size-cells = <0>;
+		#address-cells = <1>;
 
-        max31827: max31827@5f {
-            compatible = "adi,max31827";
-            reg = <0x5f>;
-            vref-supply = <&vio>;
-        };
-
-    };
+		max31827: max31827@5f {
+			compatible = "adi,max31827";
+			reg = <0x5f>;
+			vref-supply = <&vio>;
+		};
+	};
 	rx_dma: rx-dmac@44a30000 {
 		compatible = "adi,axi-dmac-1.00.a";
 		reg = <0x44a30000 0x1000>;
@@ -135,13 +134,13 @@
 			adi,out-data-mode = <0>;
 			adi,dual-data-rate;
 			adi,spi-trigger;
-			
+
 			clocks = <&cnv_ext_clk>;
 			clock-names = "trigger_clock";
-			
+
 			dmas = <&rx_dma 0>;
 			dma-names = "rx";
-			
+
 			pwm-names = "spi_trigger", "cnv";
 			pwms = <&axi_pwm_gen 0 0>, <&axi_pwm_gen 1 0>;
 		};
