@@ -386,12 +386,15 @@ static int ad9467_probe(struct spi_device *spi)
 	unsigned int id;
 	int ret;
 
+	dev_err(&spi->dev, "Probe converter...\n");
+
 	info = of_device_get_match_data(&spi->dev);
 	if (!info)
 		info = (void *)spi_get_device_id(spi)->driver_data;
 	if (!info)
 		return -ENODEV;
 
+	dev_err(&spi->dev, "Register converter...\n");
 	conv = devm_adi_axi_adc_conv_register(&spi->dev, sizeof(*st));
 	if (IS_ERR(conv))
 		return PTR_ERR(conv);

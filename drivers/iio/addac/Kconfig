@@ -49,4 +49,10 @@ config STX104
 	  The base port addresses for the devices may be configured via the base
 	  array module parameter.
 
+config IIO_CONVERTER
+	tristate "Framework for high speed converters" 
+	imply REGMAP_MMIO
+	help
+	  Framework for high speed converters
+
 endmenu

@@ -43,7 +43,8 @@
 		dmas = <&rx_dma 0>;
 		dma-names = "rx";
 
-		spibus-connected = <&adc_ad9467>;
+		clocks = <&clkc 16>;
+		adi,adc-dev = <&adc_ad9467>;
 	};
 };
 

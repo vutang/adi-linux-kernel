@@ -5,6 +5,7 @@
  */
 /dts-v1/;
 #include "zynq-7000.dtsi"
+#include <dt-bindings/interrupt-controller/irq.h>
 
 / {
 	model = "Avnet ZedBoard board";
@@ -60,3 +61,43 @@
 	dr_mode = "host";
 	usb-phy = <&usb_phy0>;
 };
+
+
+&amba {
+	rx_dma: rx-dmac@44a30000 {
+		compatible = "adi,axi-dmac-1.00.a";
+		reg = <0x44A30000 0x1000>;
+		#dma-cells = <1>;
+		interrupts = <0 57 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-parent = <&intc>;
+		clocks = <&clkc 16>;
+
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <16>;
+				adi,source-bus-type = <2>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
+		};
+	};
+
+	cf_ad9467_core_0: cf-ad9467-core-lpc@44a00000 {
+		compatible = "adi,axi-adc-10.0.a-new";
+		reg = <0x44A00000 0x10000>;
+
+		clocks = <&clkc 16>;
+	};
+};
+
+&spi0 {
+	status = "okay";
+};
+
+#define fmc_spi spi0
+
+#include "adi-ad9467-fmc-250ebz.dtsi"

@@ -360,14 +360,18 @@ static int adi_axi_adc_setup_channels(struct device *dev,
 	return 0;
 }
 
-static void axi_adc_reset(struct adi_axi_adc_state *st)
+static void axi_adc_reset(struct adi_axi_adc_state *st, struct device *dev)
 {
+	dev_info(dev, "first reset write\n");
 	adi_axi_adc_write(st, ADI_AXI_REG_RSTN, 0);
 	mdelay(10);
+	dev_info(dev, "Second reset write\n");
 	adi_axi_adc_write(st, ADI_AXI_REG_RSTN, ADI_AXI_REG_RSTN_MMCM_RSTN);
 	mdelay(10);
+	dev_info(dev, "Third reset write\n");
 	adi_axi_adc_write(st, ADI_AXI_REG_RSTN,
 			  ADI_AXI_REG_RSTN_RSTN | ADI_AXI_REG_RSTN_MMCM_RSTN);
+	dev_info(dev, "Done reset\n");
 }
 
 static void adi_axi_adc_cleanup(void *data)
@@ -384,6 +388,7 @@ static int adi_axi_adc_probe(struct platform_device *pdev)
 	struct iio_dev *indio_dev;
 	struct adi_axi_adc_client *cl;
 	struct adi_axi_adc_state *st;
+	struct clk *clk;
 	unsigned int ver;
 	int ret;
 
@@ -391,6 +396,7 @@ static int adi_axi_adc_probe(struct platform_device *pdev)
 	if (IS_ERR(cl))
 		return PTR_ERR(cl);
 
+	dev_info(&pdev->dev, "Client attached...\n");
 	ret = devm_add_action_or_reset(&pdev->dev, adi_axi_adc_cleanup, cl);
 	if (ret)
 		return ret;
@@ -410,8 +416,16 @@ static int adi_axi_adc_probe(struct platform_device *pdev)
 
 	conv = &st->client->conv;
 
-	axi_adc_reset(st);
+	clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	if (IS_ERR(clk)) {
+		dev_err(&pdev->dev, "clk_get failed with %ld\n", PTR_ERR(clk));
+		return PTR_ERR(clk);
+	}
 
+	dev_info(&pdev->dev, "Reset core...\n");
+	axi_adc_reset(st, &pdev->dev);
+
+	dev_info(&pdev->dev, "Read version core...\n");
 	ver = adi_axi_adc_read(st, ADI_AXI_REG_VERSION);
 
 	if (cl->info->version > ver) {

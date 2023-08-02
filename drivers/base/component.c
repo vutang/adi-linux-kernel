@@ -285,6 +285,34 @@ static void take_down_aggregate_device(struct aggregate_device *adev)
 }
 
 /**
+ * component_compare_fwnode - A common component compare function for fwnode
+ * @dev: component device
+ * @data: @compare_data from component_match_add_release()
+ *
+ * A common compare function when compare_data is device fwnode. e.g.
+ * component_match_add_release(masterdev, &match, component_release_fwnode,
+ * component_compare_fwnode, component_dev_fwnode)
+ */
+int component_compare_fwnode(struct device *dev, void *data)
+{
+	return device_match_fwnode(dev, data);
+}
+EXPORT_SYMBOL_GPL(component_compare_fwnode);
+
+/**
+ * component_release_fwnode - A common component release function for fwnode
+ * @dev: component device
+ * @data: @compare_data from component_match_add_release()
+ *
+ * About the example, Please see component_compare_fwnode().
+ */
+void component_release_fwnode(struct device *dev, void *data)
+{
+	fwnode_handle_put(data);
+}
+EXPORT_SYMBOL_GPL(component_release_fwnode);
+
+/**
  * component_compare_of - A common component compare function for of_node
  * @dev: component device
  * @data: @compare_data from component_match_add_release()

@@ -936,8 +936,10 @@ static int axi_dmac_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
+	dev_info(&pdev->dev, "Read DMAC version\n");
 	version = axi_dmac_read(dmac, ADI_AXI_REG_VERSION);
 
+	dev_info(&pdev->dev, "Read DMAC version,: %08X\n", version);
 	if (version >= ADI_AXI_PCORE_VER(4, 3, 'a'))
 		ret = axi_dmac_read_chan_config(&pdev->dev, dmac);
 	else

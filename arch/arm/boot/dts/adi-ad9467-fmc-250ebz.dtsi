@@ -12,14 +12,19 @@
 
 &fmc_spi {
 	adc_ad9467: ad9467@0 {
-		compatible = "adi,ad9467";
+		compatible = "adi,ad9467-new";
 		reg = <0>;
+
+		dmas = <&rx_dma 0>;
+		dma-names = "rx";
 
 		spi-max-frequency = <10000000>;
 		adi,spi-3wire-enable;
 
 		clocks = <&clk_ad9517 3>;
-		clock-names = "adc_clk";
+		clock-names = "adc-clk";
+
+		converters = <&cf_ad9467_core_0>;
 	};
 
 	clk_ad9517: ad9517@1 {
