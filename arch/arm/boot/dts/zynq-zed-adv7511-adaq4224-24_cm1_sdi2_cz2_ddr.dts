@@ -47,6 +47,20 @@
 			clock-output-names = "cnv_ext_clk";
 		};
 	};
+
+	max17687_control@0 {
+		compatible = "adi,one-bit-adc-dac";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+ 		in-gpios = <&gpio0 89 GPIO_ACTIVE_HIGH>;
+
+		channel@0 {
+			reg = <0>;
+			label = "MAX17687_RST";
+		};
+	};
 };
 
 &fpga_axi {
