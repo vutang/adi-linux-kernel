@@ -12,6 +12,19 @@
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <linux/regmap.h>
+#include <linux/hwmon-sysfs.h>
+#include <linux/of_device.h>
+
+/*
+ * gcc turns __builtin_ffsll() into a call to __ffsdi2(), which is not provided
+ * by every architecture. __ffs64() is available on all architectures, but the
+ * result is not defined if no bits are set.
+ */
+#define max31827__bf_shf(x)			 \
+	({					 \
+		typeof(x) x_ = (x);		 \
+		((x_) != 0) ? __ffs64(x_) : 0x0; \
+	})
 
 #define MAX31827_T_REG	0x0
 #define MAX31827_CONFIGURATION_REG	0x2
@@ -22,10 +35,18 @@
 
 #define MAX31827_CONFIGURATION_1SHOT_MASK	BIT(0)
 #define MAX31827_CONFIGURATION_CNV_RATE_MASK	GENMASK(3, 1)
+#define MAX31827_CONFIGURATION_TIMEOUT_MASK	BIT(5)
+#define MAX31827_CONFIGURATION_RESOLUTION_MASK	GENMASK(7, 6)
+#define MAX31827_CONFIGURATION_ALRM_POL_MASK	BIT(8)
+#define MAX31827_CONFIGURATION_COMP_INT_MASK	BIT(9)
+#define MAX31827_CONFIGURATION_FLT_Q_MASK	GENMASK(11, 10)
 #define MAX31827_CONFIGURATION_U_TEMP_STAT_MASK BIT(14)
 #define MAX31827_CONFIGURATION_O_TEMP_STAT_MASK BIT(15)
 
 #define MAX31827_12_BIT_CNV_TIME	140
+
+#define MAX31827_ALRM_POL_LOW	0x0
+#define MAX31827_FLT_Q_1	0x0
 
 #define MAX31827_16_BIT_TO_M_DGR(x)	(sign_extend32(x, 15) * 1000 / 16)
 #define MAX31827_M_DGR_TO_16_BIT(x)	(((x) << 4) / 1000)
@@ -58,6 +79,7 @@ struct max31827_state {
 	struct mutex lock;
 	struct regmap *regmap;
 	bool enable;
+	struct i2c_client *client;
 };
 
 static const struct regmap_config max31827_regmap = {
@@ -361,14 +383,57 @@ static int max31827_write(struct device *dev, enum hwmon_sensor_types type,
 	return -EOPNOTSUPP;
 }
 
-static int max31827_init_client(struct max31827_state *st)
+static int max31827_init_client(struct max31827_state *st,
+				struct fwnode_handle *fwnode)
 {
-	st->enable = true;
+	bool prop;
+	u32 data, lsb_idx;
+	unsigned int res = 0;
+	int ret;
 
-	return regmap_update_bits(st->regmap, MAX31827_CONFIGURATION_REG,
-				  MAX31827_CONFIGURATION_1SHOT_MASK |
-					  MAX31827_CONFIGURATION_CNV_RATE_MASK,
-				  MAX31827_DEVICE_ENABLE(1));
+	st->enable = true;
+	res |= MAX31827_DEVICE_ENABLE(1);
+
+	res |= MAX31827_CONFIGURATION_RESOLUTION_MASK;
+
+	prop = fwnode_property_read_bool(fwnode, "adi,comp-int");
+	res |= FIELD_PREP(MAX31827_CONFIGURATION_COMP_INT_MASK, prop);
+
+	prop = fwnode_property_read_bool(fwnode, "adi,timeout-enable");
+	res |= FIELD_PREP(MAX31827_CONFIGURATION_TIMEOUT_MASK, !prop);
+
+	if (fwnode_property_present(fwnode, "adi,alarm-pol")) {
+		ret = fwnode_property_read_u32(fwnode, "adi,alarm-pol", &data);
+		if (ret)
+			return ret;
+
+		res |= FIELD_PREP(MAX31827_CONFIGURATION_ALRM_POL_MASK, !!data);
+	} else {
+		res |= FIELD_PREP(MAX31827_CONFIGURATION_ALRM_POL_MASK,
+				  MAX31827_ALRM_POL_LOW);
+	}
+
+	if (fwnode_property_present(fwnode, "adi,fault-q")) {
+		ret = fwnode_property_read_u32(fwnode, "adi,fault-q", &data);
+		if (ret)
+			return ret;
+
+		/*
+		 * Convert the desired fault queue into register bits.
+		 */
+		lsb_idx = max31827__bf_shf(data);
+		if (lsb_idx > 3 || data != BIT(lsb_idx)) {
+			dev_err(&st->client->dev, "Invalid data in fault queue\n");
+			return -EOPNOTSUPP;
+		}
+
+		res |= FIELD_PREP(MAX31827_CONFIGURATION_FLT_Q_MASK, lsb_idx);
+	} else {
+		res |= FIELD_PREP(MAX31827_CONFIGURATION_FLT_Q_MASK,
+				  MAX31827_FLT_Q_1);
+	}
+
+	return regmap_write(st->regmap, MAX31827_CONFIGURATION_REG, res);
 }
 
 static const struct hwmon_channel_info *max31827_info[] = {
@@ -396,6 +461,7 @@ static int max31827_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
 	struct max31827_state *st;
+	struct fwnode_handle *fwnode;
 	int err;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_WORD_DATA))
@@ -412,7 +478,10 @@ static int max31827_probe(struct i2c_client *client)
 		return dev_err_probe(dev, PTR_ERR(st->regmap),
 				     "Failed to allocate regmap.\n");
 
-	err = max31827_init_client(st);
+	st->client = client;
+	fwnode = dev_fwnode(dev);
+
+	err = max31827_init_client(st, fwnode);
 	if (err)
 		return err;
 
