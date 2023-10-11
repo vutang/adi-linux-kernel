@@ -135,6 +135,7 @@ struct ltc2387_dev {
 	struct mutex		lock;
 
 	int			sampling_freq;
+	int			total_sampling_freq;
 	unsigned int		vref_mv;
 	unsigned int		id;
 	enum ltc2387_lane_modes	lane_mode;
@@ -176,16 +177,22 @@ struct ltc2387_dev {
 // 	return pwm_apply_state(ltc->clk_en, &clk_en_state);
 // }
 
-static int ltc2387_set_sampling_freq(struct ltc2387_dev *ltc, int freq)
+static int ltc2387_set_sampling_freq(struct iio_dev *indio_dev, int freq)
 {
+	struct ltc2387_dev *ltc = iio_priv(indio_dev);
 	unsigned long long target, ref_clk_period_ps;
 	struct pwm_state clk_en_state, cnv_state;
-	unsigned long ref_clk_rate;
-	int ret, clk_en_time;
+	unsigned long ref_clk_rate, bit;
+	int ret, clk_en_time, num_enabled;
 
+	ltc->total_sampling_freq = freq;
 	ref_clk_rate = clk_get_rate(ltc->ref_clk);
 
-	target = DIV_ROUND_CLOSEST_ULL(ref_clk_rate, freq);
+	for_each_set_bit(bit, indio_dev->active_scan_mask, indio_dev->masklength)
+		num_enabled++;
+
+	target = DIV_ROUND_CLOSEST_ULL(ref_clk_rate,
+				       DIV_ROUND_CLOSEST(freq, num_enabled));
 	ref_clk_period_ps = DIV_ROUND_CLOSEST_ULL(1000000000000ULL, ref_clk_rate);
 	cnv_state.period = ref_clk_period_ps * target;
 	cnv_state.duty_cycle = ref_clk_period_ps;
@@ -225,7 +232,7 @@ static int ltc2387_setup(struct iio_dev *indio_dev)
 	if (fwnode_property_present(fwnode, "adi,use-two-lanes"))
 		ltc->lane_mode = TWO_LANES;
 
-	return ltc2387_set_sampling_freq(ltc, 15*MHz);
+	return ltc2387_set_sampling_freq(indio_dev, 15*MHz);
 	// return ltc2387_set_conversion(ltc, false);
 }
 
@@ -249,16 +256,46 @@ static int ltc2387_write_raw(struct iio_dev *indio_dev,
 			     struct iio_chan_spec const *chan,
 			     int val, int val2, long info)
 {
-	struct ltc2387_dev *ltc = iio_priv(indio_dev);
-
 	switch (info) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
-		return ltc2387_set_sampling_freq(ltc, val);
+		return ltc2387_set_sampling_freq(indio_dev, val);
 	case IIO_CHAN_INFO_SCALE:
 
 	default:
 		return -EINVAL;
 	}
+}
+
+static int ltc2387_update_scan_mode(struct iio_dev *indio_dev,
+				    const unsigned long *scan_mask)
+{
+	struct ltc2387_dev *ltc = iio_priv(indio_dev);
+	unsigned long long samp_freq;
+	unsigned long bit;
+	int num_enabled;
+
+	for_each_set_bit(bit, scan_mask, indio_dev->masklength)
+		num_enabled++;
+
+	samp_freq = DIV_ROUND_CLOSEST_ULL(1000000000000, pwm_get_period(ltc->cnv));
+
+	/*
+	 * On the HDL project, there is one CNV lane and that lane
+	 * simultaneously triggers ADC readings for the 4 LTC2387 devices
+	 * (CNV lane goes to all 4 ADCs).
+	 * Each CNV pulse triggers a read on each ADC which results in the total
+	 * ADC sampling frequency to be 4 times the PWM output frequency when
+	 * 4 channels are enabled for capture.
+	 * If the PWM output frequency is not close to the sampling frequency per
+	 * device it means that one or more channels have been enabled or
+	 * disabled after the last time set_sampling_freq() has been called.
+	 */
+	if (samp_freq * num_enabled < ltc->total_sampling_freq - 100 ||
+		samp_freq * num_enabled > ltc->total_sampling_freq + 100)
+		/* Update PWM to match the requested total sampling frequency */
+		ltc2387_set_sampling_freq(indio_dev, ltc->total_sampling_freq);
+
+	return 0;
 }
 
 static int ltc2387_buffer_preenable(struct iio_dev *indio_dev)
@@ -318,6 +355,7 @@ static const struct iio_buffer_setup_ops ltc2387_buffer_ops = {
 static const struct iio_info ltc2387_info = {
 	.read_raw = ltc2387_read_raw,
 	.write_raw = ltc2387_write_raw,
+	.update_scan_mode = &ltc2387_update_scan_mode,
 };
 
 static const struct of_device_id ltc2387_of_match[] = {
