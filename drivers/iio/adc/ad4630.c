@@ -126,6 +126,8 @@ enum {
 	ID_AD4030_24,
 	ID_AD4630_16,
 	ID_AD4630_24,
+	ID_ADAQ4216,
+	ID_ADAQ4220,
 	ID_ADAQ4224,
 };
 
@@ -911,12 +913,36 @@ static const struct ad4630_chip_info ad4630_chip_info[] = {
 		.base_word_len = 24,
 		.n_channels = 2,
 	},
+	[ID_ADAQ4216] = {
+		.available_masks = ad4030_channel_masks,
+		.modes = ad4030_24_modes,
+		.out_modes_mask = GENMASK(3, 0),
+		.name = "adaq4216",
+		.grade = 0x1E,
+		.min_offset = (int)BIT(15) * -1,
+		.max_offset = BIT(15) - 1,
+		.base_word_len = 16,
+		.has_pgia = true,
+		.n_channels = 1,
+	},
+	[ID_ADAQ4220] = {
+		.available_masks = ad4030_channel_masks,
+		.modes = ad4030_24_modes,
+		.out_modes_mask = GENMASK(3, 0),
+		.name = "adaq4220",
+		.grade = 0x1D,
+		.min_offset = (int)BIT(19) * -1,
+		.max_offset = BIT(19) - 1,
+		.base_word_len = 20,
+		.has_pgia = true,
+		.n_channels = 1,
+	},
 	[ID_ADAQ4224] = {
 		.available_masks = ad4030_channel_masks,
 		.modes = ad4030_24_modes,
 		.out_modes_mask = GENMASK(3, 0),
 		.name = "adaq4224",
-		.grade = 0x10,   /* !FIXME: To be updated with the value from datasheet */
+		.grade = 0x1C,
 		.min_offset = (int)BIT(23) * -1,
 		.max_offset = BIT(23) - 1,
 		.base_word_len = 24,
@@ -1498,6 +1524,8 @@ static const struct spi_device_id ad4630_id_table[] = {
 	{ "ad4030-24", (kernel_ulong_t)&ad4630_chip_info[ID_AD4030_24] },
 	{ "ad4630-16", (kernel_ulong_t)&ad4630_chip_info[ID_AD4630_16] },
 	{ "ad4630-24", (kernel_ulong_t)&ad4630_chip_info[ID_AD4630_24] },
+	{ "adaq4216", (kernel_ulong_t)&ad4630_chip_info[ID_ADAQ4216] },
+	{ "adaq4220", (kernel_ulong_t)&ad4630_chip_info[ID_ADAQ4220] },
 	{ "adaq4224", (kernel_ulong_t)&ad4630_chip_info[ID_ADAQ4224] },
 	{ "ad463x", (kernel_ulong_t)&ad463x_chip_info },
 	{}
@@ -1508,6 +1536,8 @@ static const struct of_device_id ad4630_of_match[] = {
 	{ .compatible = "adi,ad4630-24", .data = &ad4630_chip_info[ID_AD4030_24] },
 	{ .compatible = "adi,ad4630-16", .data = &ad4630_chip_info[ID_AD4630_16] },
 	{ .compatible = "adi,ad4030-24", .data = &ad4630_chip_info[ID_AD4630_24] },
+	{ .compatible = "adi,adaq4216", .data = &ad4630_chip_info[ID_ADAQ4216] },
+	{ .compatible = "adi,adaq4220", .data = &ad4630_chip_info[ID_ADAQ4220] },
 	{ .compatible = "adi,adaq4224", .data = &ad4630_chip_info[ID_ADAQ4224] },
 	{ .compatible = "adi,ad463x", .data = &ad463x_chip_info},
 	{}
@@ -1527,5 +1557,7 @@ module_spi_driver(ad4630_driver);
 
 MODULE_AUTHOR("Sergiu Cuciurean <sergiu.cuciurean@analog.com>");
 MODULE_AUTHOR("Nuno Sa <nuno.sa@analog.com>");
-MODULE_DESCRIPTION("Analog Devices AD4630 ADC family driver");
+MODULE_AUTHOR("Marcelo Schmitt <marcelo.schmitt@analog.com>");
+MODULE_AUTHOR("Liviu Adace <liviu.adace@analog.com>");
+MODULE_DESCRIPTION("Analog Devices AD4630 and ADAQ42xx ADC family driver");
 MODULE_LICENSE("GPL v2");
