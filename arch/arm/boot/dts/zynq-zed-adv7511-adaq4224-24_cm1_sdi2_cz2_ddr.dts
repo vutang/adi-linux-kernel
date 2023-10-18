@@ -79,6 +79,11 @@
 			compatible = "adi,max31827";
 			reg = <0x5f>;
 			vref-supply = <&vio>;
+
+			adi,comp-int;
+			adi,alarm-pol = <0>;
+			adi,fault-q = <1>;
+			adi,timeout-enable;
 		};
 	};
 	rx_dma: rx-dmac@44a30000 {
