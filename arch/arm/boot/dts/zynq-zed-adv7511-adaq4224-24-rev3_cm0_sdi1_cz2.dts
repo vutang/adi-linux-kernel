@@ -48,18 +48,6 @@
 		};
 	};
 
-	i2c {
-		#address-cells = <1>;
-		#size-cells = <0>;
-		status = "okay";
-
-		max31827: max31827@5f {
-			compatible = "adi,max31827";
-			reg = <0x5f>;
-			vref-supply = <&vio>;
-		};
-	};
-
 	max17687_control@0 {
 		compatible = "adi,one-bit-adc-dac";
 
@@ -113,6 +101,35 @@
 		#pwm-cells = <2>;
 		clocks = <&cnv_ext_clk>;
 
+	};
+
+
+	i2c@41620000 {
+		compatible = "xlnx,axi-iic-1.01.b", "xlnx,xps-iic-2.00.a";
+		reg = <0x41620000 0x10000>;
+		interrupt-parent = <&intc>;
+		interrupts = <0 55 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&clkc 15>;
+		clock-names = "pclk";
+
+		#size-cells = <0>;
+		#address-cells = <1>;
+
+		eeprom@50 {
+			compatible = "at24,24c02";
+			reg = <0x50>;
+		};
+
+		max31827@5f {
+			compatible = "adi,max31827";
+			reg = <0x5f>;
+			vref-supply = <&vio>;
+
+			adi,comp-int;
+			adi,alarm-pol = <0>;
+			adi,fault-q = <1>;
+			adi,timeout-enable;
+		};
 	};
 
 	axi_spi_engine: spi@44a00000 {
