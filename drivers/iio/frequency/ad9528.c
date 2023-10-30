@@ -1700,16 +1700,17 @@ static int ad9528_probe(struct spi_device *spi)
 	mutex_init(&st->lock);
 
 	st->reg = devm_regulator_get(&spi->dev, "vcc");
-	if (!IS_ERR(st->reg)) {
-		ret = regulator_enable(st->reg);
-		if (ret)
-			return ret;
+	if (IS_ERR(st->reg))
+		return PTR_ERR(st->reg);
 
-		ret = devm_add_action_or_reset(&spi->dev, ad9528_reg_disable,
-					       st->reg);
-		if (ret)
-			return ret;
-	}
+	ret = regulator_enable(st->reg);
+	if (ret)
+		return ret;
+
+        ret = devm_add_action_or_reset(&spi->dev, ad9528_reg_disable,
+				       st->reg);
+        if (ret)
+		return ret;
 
 	st->sysref_req_gpio = devm_gpiod_get_optional(&spi->dev, "sysref-req",
 					GPIOD_OUT_LOW);
