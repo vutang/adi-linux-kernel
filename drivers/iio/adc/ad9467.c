@@ -274,6 +274,8 @@ static int ad9467_get_scale(struct adi_axi_adc_conv *conv, int *val, int *val2)
 	unsigned int i, vref_val;
 
 	vref_val = ad9467_spi_read(st->spi, AN877_ADC_REG_VREF);
+	if (vref_val < 0)
+		return vref_val;
 
 	vref_val &= info1->vref_mask;
 
