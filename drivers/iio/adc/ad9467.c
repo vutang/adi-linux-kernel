@@ -4,6 +4,7 @@
  *
  * Copyright 2012-2020 Analog Devices Inc.
  */
+#include "linux/dev_printk.h"
 #include <linux/cleanup.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -203,6 +204,9 @@ static void __ad9467_get_scale(struct ad9467_state *st, int index,
 
 	tmp = (st->info->scale_table[index][0] * 1000000ULL) >>
 			chan->scan_type.realbits;
+
+	dev_info(&st->spi->dev, "tmp=%u [%d]\n", tmp,
+		 st->info->scale_table[index][0]);
 	*val = tmp / 1000000;
 	*val2 = tmp % 1000000;
 }
@@ -232,17 +236,19 @@ static const struct iio_chan_spec ad9467_channels[] = {
 };
 
 static const struct ad9467_chip_info ad9467_chip_tbl = {
-	.id = CHIPID_AD9265,
-	.max_rate = 125000000UL,
-	.scale_table = ad9265_scale_table,
-	.num_scales = ARRAY_SIZE(ad9265_scale_table),
+	.name = "ad9467",
+	.id = CHIPID_AD9467,
+	.max_rate = 250000000UL,
+	.scale_table = ad9467_scale_table,
+	.num_scales = ARRAY_SIZE(ad9467_scale_table),
 	.channels = ad9467_channels,
 	.num_channels = ARRAY_SIZE(ad9467_channels),
-	.default_output_mode = AD9265_DEF_OUTPUT_MODE,
-	.vref_mask = AD9265_REG_VREF_MASK,
+	.default_output_mode = AD9467_DEF_OUTPUT_MODE,
+	.vref_mask = AD9467_REG_VREF_MASK,
 };
 
 static const struct ad9467_chip_info ad9434_chip_tbl = {
+	.name = "ad9434",
 	.id = CHIPID_AD9434,
 	.max_rate = 500000000UL,
 	.scale_table = ad9434_scale_table,
@@ -254,14 +260,15 @@ static const struct ad9467_chip_info ad9434_chip_tbl = {
 };
 
 static const struct ad9467_chip_info ad9265_chip_tbl = {
-	.id = CHIPID_AD9467,
-	.max_rate = 250000000UL,
-	.scale_table = ad9467_scale_table,
-	.num_scales = ARRAY_SIZE(ad9467_scale_table),
+	.name = "ad9265",
+	.id = CHIPID_AD9265,
+	.max_rate = 125000000UL,
+	.scale_table = ad9265_scale_table,
+	.num_scales = ARRAY_SIZE(ad9265_scale_table),
 	.channels = ad9467_channels,
 	.num_channels = ARRAY_SIZE(ad9467_channels),
-	.default_output_mode = AD9467_DEF_OUTPUT_MODE,
-	.vref_mask = AD9467_REG_VREF_MASK,
+	.default_output_mode = AD9265_DEF_OUTPUT_MODE,
+	.vref_mask = AD9265_REG_VREF_MASK,
 };
 
 static int ad9467_get_scale(struct ad9467_state *st, int *val, int *val2)
@@ -279,6 +286,7 @@ static int ad9467_get_scale(struct ad9467_state *st, int *val, int *val2)
 			break;
 	}
 
+	dev_info(&st->spi->dev, "got val%u, i=%u\n", vref_val, i);
 	if (i == st->info->num_scales)
 		return -ERANGE;
 
@@ -292,6 +300,8 @@ static int ad9467_set_scale(struct ad9467_state *st, int val, int val2)
 	unsigned int scale_val[2];
 	unsigned int i;
 	int ret;
+
+	dev_info(&st->spi->dev, "Set scale val:%d, %d\n", val, val2);
 
 	if (val != 0)
 		return -EINVAL;
@@ -476,6 +486,7 @@ static int ad9467_probe(struct spi_device *spi)
 	unsigned int id;
 	int ret;
 
+	dev_info(&spi->dev, "probe me\n");
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
 	if (!indio_dev)
 		return -ENOMEM;
@@ -516,18 +527,24 @@ static int ad9467_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
+	dev_info(&spi->dev, "%d\n", __LINE__);
 	st->back = devm_iio_backend_get(&spi->dev, NULL);
-	if (IS_ERR(st->back))
+	if (IS_ERR(st->back)) {
+		dev_err(&spi->dev, "failed to get back%ld\n", PTR_ERR(st->back));
 		return PTR_ERR(st->back);
+	}
 
+	dev_info(&spi->dev, "%d\n", __LINE__);
 	ret = iio_backend_enable(st->back);
 	if (ret)
 		return ret;
 
+	dev_info(&spi->dev, "%d\n", __LINE__);
 	ret = ad9467_setup(st);
 	if (ret)
 		return ret;
 
+	dev_info(&spi->dev, "%d\n", __LINE__);
 	return devm_iio_device_register(&spi->dev, indio_dev);
 }
 
