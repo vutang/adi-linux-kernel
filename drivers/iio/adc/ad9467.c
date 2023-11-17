@@ -4,7 +4,6 @@
  *
  * Copyright 2012-2020 Analog Devices Inc.
  */
-#include "linux/dev_printk.h"
 #include <linux/cleanup.h>
 #include <linux/module.h>
 #include <linux/mutex.h>

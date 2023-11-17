@@ -134,6 +134,8 @@ struct iio_backend *devm_iio_backend_get(struct device *dev, const char *name)
 
 	guard(mutex)(&iio_back_lock);
 	list_for_each_entry(back, &iio_back_list, entry) {
+		struct device_link *link;
+
 		if (!device_match_fwnode(back->dev, fwnode))
 			continue;
 
@@ -147,6 +149,13 @@ struct iio_backend *devm_iio_backend_get(struct device *dev, const char *name)
 		ret = devm_add_action_or_reset(dev, iio_backend_release, back);
 		if (ret)
 			return ERR_PTR(ret);
+
+		/* So the consumer get's removed on supplier unbind */
+		link = device_link_add(dev, back->dev,
+				       DL_FLAG_AUTOREMOVE_CONSUMER);
+		if (!link)
+			dev_warn(dev, "Could not link to supplier(%s)\n",
+				 dev_name(back->dev));
 
 		return back;
 	}

@@ -85,7 +85,7 @@ static int __fwnode_link_add(struct fwnode_handle *con,
 
 	list_add(&link->s_hook, &sup->consumers);
 	list_add(&link->c_hook, &con->suppliers);
-	pr_debug("%pfwf Linked as a fwnode consumer to %pfwf\n",
+	pr_info("%pfwf Linked as a fwnode consumer to %pfwf\n",
 		 con, sup);
 
 	return 0;
@@ -109,7 +109,7 @@ int fwnode_link_add(struct fwnode_handle *con, struct fwnode_handle *sup)
  */
 static void __fwnode_link_del(struct fwnode_link *link)
 {
-	pr_debug("%pfwf Dropping the fwnode link to %pfwf\n",
+	pr_info("%pfwf Dropping the fwnode link to %pfwf\n",
 		 link->consumer, link->supplier);
 	list_del(&link->s_hook);
 	list_del(&link->c_hook);
@@ -713,6 +713,9 @@ struct device_link *device_link_add(struct device *consumer,
 {
 	struct device_link *link;
 
+	dev_info(consumer, "Try to link consumer to %s (%08X)\n", dev_name(supplier),
+		 flags);
+
 	if (!consumer || !supplier || consumer == supplier ||
 	    flags & ~DL_ADD_VALID_FLAGS ||
 	    (flags & DL_FLAG_STATELESS && flags & DL_MANAGED_LINK_FLAGS) ||
@@ -775,6 +778,8 @@ struct device_link *device_link_add(struct device *consumer,
 		if (link->consumer != consumer)
 			continue;
 
+		dev_info(consumer, "Update link consumer to %s (%08X):(%08X)\n",
+			 dev_name(supplier), flags, link->flags);
 		if (link->flags & DL_FLAG_INFERRED &&
 		    !(flags & DL_FLAG_INFERRED))
 			link->flags &= ~DL_FLAG_INFERRED;
@@ -806,11 +811,14 @@ struct device_link *device_link_add(struct device *consumer,
 		 * update the existing link to stay around longer.
 		 */
 		if (flags & DL_FLAG_AUTOREMOVE_SUPPLIER) {
-			if (link->flags & DL_FLAG_AUTOREMOVE_CONSUMER) {
-				link->flags &= ~DL_FLAG_AUTOREMOVE_CONSUMER;
-				link->flags |= DL_FLAG_AUTOREMOVE_SUPPLIER;
-			}
-		} else if (!(flags & DL_FLAG_AUTOREMOVE_CONSUMER)) {
+			link->flags &= ~DL_FLAG_AUTOREMOVE_CONSUMER;
+			link->flags &= ~DL_FLAG_AUTOPROBE_CONSUMER;
+			link->flags |= DL_FLAG_AUTOREMOVE_SUPPLIER;
+		} else if (flags & DL_FLAG_AUTOREMOVE_CONSUMER) {
+			link->flags &= ~DL_FLAG_AUTOREMOVE_SUPPLIER;
+			link->flags &= ~DL_FLAG_AUTOPROBE_CONSUMER;
+			link->flags |= DL_FLAG_AUTOREMOVE_CONSUMER;
+		} else {
 			link->flags &= ~(DL_FLAG_AUTOREMOVE_CONSUMER |
 					 DL_FLAG_AUTOREMOVE_SUPPLIER);
 		}
@@ -879,7 +887,7 @@ struct device_link *device_link_add(struct device *consumer,
 	list_add_tail_rcu(&link->c_node, &consumer->links.suppliers);
 
 	if (flags & DL_FLAG_SYNC_STATE_ONLY) {
-		dev_dbg(consumer,
+		dev_info(consumer,
 			"Linked as a sync state only consumer to %s\n",
 			dev_name(supplier));
 		goto out;
@@ -895,7 +903,8 @@ reorder:
 	 */
 	device_reorder_to_tail(consumer, NULL);
 
-	dev_dbg(consumer, "Linked as a consumer to %s\n", dev_name(supplier));
+	dev_info(consumer, "Linked as a consumer to %s (%08X)\n", dev_name(supplier),
+		 link->flags);
 
 out:
 	device_pm_unlock();
@@ -912,7 +921,7 @@ static void __device_link_del(struct kref *kref)
 {
 	struct device_link *link = container_of(kref, struct device_link, kref);
 
-	dev_dbg(link->consumer, "Dropping the link to %s\n",
+	dev_info(link->consumer, "Dropping the link to %s\n",
 		dev_name(link->supplier));
 
 	pm_runtime_drop_link(link);
@@ -1045,19 +1054,22 @@ int device_links_check_suppliers(struct device *dev)
 	if (sup_fw) {
 		if (!dev_is_best_effort(dev)) {
 			fwnode_ret = -EPROBE_DEFER;
-			dev_err_probe(dev, -EPROBE_DEFER,
-				    "wait for supplier %pfwf\n", sup_fw);
+			dev_info(dev, "wait for supplier %pfwf\n", sup_fw);
 		} else {
 			fwnode_ret = -EAGAIN;
 		}
 	}
 	mutex_unlock(&fwnode_link_lock);
-	if (fwnode_ret == -EPROBE_DEFER)
+	if (fwnode_ret == -EPROBE_DEFER) {
+		dev_info(dev, "[ret]wait for supplier %pfwf\n", sup_fw);
 		return fwnode_ret;
+	}
 
 	device_links_write_lock();
 
 	list_for_each_entry(link, &dev->links.suppliers, c_node) {
+		dev_info(dev, "Check supplier %s, flags(%08X)\n", dev_name(link->supplier),
+			 link->flags);
 		if (!(link->flags & DL_FLAG_MANAGED))
 			continue;
 
@@ -1072,9 +1084,8 @@ int device_links_check_suppliers(struct device *dev)
 			}
 
 			device_links_missing_supplier(dev);
-			dev_err_probe(dev, -EPROBE_DEFER,
-				      "supplier %s not ready\n",
-				      dev_name(link->supplier));
+			dev_info(dev, "supplier %s not ready\n",
+				 dev_name(link->supplier));
 			ret = -EPROBE_DEFER;
 			break;
 		}
@@ -1332,8 +1343,10 @@ void device_links_driver_bound(struct device *dev)
 		WARN_ON(link->status != DL_STATE_DORMANT);
 		WRITE_ONCE(link->status, DL_STATE_AVAILABLE);
 
-		if (link->flags & DL_FLAG_AUTOPROBE_CONSUMER)
+		if (link->flags & DL_FLAG_AUTOPROBE_CONSUMER) {
+			dev_info(link->consumer, "Add to deferred probe...\n");
 			driver_deferred_probe_add(link->consumer);
+		}
 	}
 
 	if (defer_sync_state_count)
@@ -1592,6 +1605,7 @@ void device_links_unbind_consumers(struct device *dev)
 
 			device_links_write_unlock();
 
+			dev_info(consumer, "Releasing device from supplier...\n");
 			device_release_driver_internal(consumer, NULL,
 						       consumer->parent);
 			put_device(consumer);
@@ -1738,7 +1752,7 @@ static void fw_devlink_relax_link(struct device_link *link)
 
 	pm_runtime_drop_link(link);
 	link->flags = DL_FLAG_MANAGED | FW_DEVLINK_FLAGS_PERMISSIVE;
-	dev_dbg(link->consumer, "Relaxing link with %s\n",
+	dev_info(link->consumer, "Relaxing link with %s\n",
 		dev_name(link->supplier));
 }
 
@@ -1746,6 +1760,7 @@ static int fw_devlink_no_driver(struct device *dev, void *data)
 {
 	struct device_link *link = to_devlink(dev);
 
+	dev_info(dev, "Call fw_devlink_relax_link(%d)\n", __LINE__);
 	if (!link->supplier->can_match)
 		fw_devlink_relax_link(link);
 
@@ -1863,6 +1878,7 @@ static void fw_devlink_unblock_consumers(struct device *dev)
 		return;
 
 	device_links_write_lock();
+	dev_info(dev, "Call fw_devlink_relax_link(%d)\n", __LINE__);
 	list_for_each_entry(link, &dev->links.consumers, s_node)
 		fw_devlink_relax_link(link);
 	device_links_write_unlock();
@@ -1990,6 +2006,7 @@ static bool __fw_devlink_relax_cycles(struct device *con,
 
 		if (__fw_devlink_relax_cycles(con,
 					      dev_link->supplier->fwnode)) {
+			dev_info(con, "Call fw_devlink_relax_link(%d)\n", __LINE__);
 			fw_devlink_relax_link(dev_link);
 			dev_link->flags |= DL_FLAG_CYCLE;
 			ret = true;
@@ -3541,8 +3558,6 @@ int device_add(struct device *dev)
 		error = -EINVAL;
 	if (error)
 		goto name_error;
-
-	pr_debug("device: '%s': %s\n", dev_name(dev), __func__);
 
 	parent = get_device(dev->parent);
 	kobj = get_device_parent(dev, parent);
