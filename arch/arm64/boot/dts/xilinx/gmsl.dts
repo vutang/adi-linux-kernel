@@ -469,6 +469,27 @@
 				#size-cells = <0>;
 				compatible = "maxim,max96724";
 				reg = <0x27>;
+
+				gpio-controller;
+				#gpio-cells = <2>;
+
+				pins {
+					SER_MFP3_FSYNC_LABEL: SER_MFP3_FSYNC_LABEL {
+					pins = "mfp3";
+					function = "gpio";
+					bias-pull-up;
+					input-enable;
+					maxim,jitter-compensation;
+					maxim,gmsl-tx-a;
+					maxim,gmsl-tx-id-a = <3>;
+					maxim,gmsl-tx-b;
+					maxim,gmsl-tx-id-b = <3>;
+					maxim,gmsl-tx-c;
+					maxim,gmsl-tx-id-c = <3>;
+					maxim,gmsl-tx-d;
+					maxim,gmsl-tx-id-d = <3>;
+					};
+				};
 			};
 		};
 	};
