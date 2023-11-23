@@ -4,9 +4,12 @@
  *
  * Copyright 2023 Analog Devices Inc.
  */
+#include "linux/kernel.h"
 #include <linux/bitfield.h>
-#include <linux/clk.h>
 #include <linux/cleanup.h>
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/gpio/driver.h>
@@ -20,10 +23,9 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/property.h>
+#include <linux/string.h>
 #include <linux/units.h>
-
-
-#include <linux/kstrtox.h>
+#include <linux/util_macros.h>
 
 #define LTC4282_CTRL_LSB			0x00
   #define LTC4282_CTRL_OV_RETRY_MASK		BIT(0)
@@ -80,19 +82,20 @@
 #define LTC4282_ALERT_CTRL			0x1C
   #define LTC4282_ALERT_OUT_MASK		BIT(6)
 #define LTC4282_ADC_CTRL			0x1D
+  #define LTC4282_FAULT_LOG_EN_MASK		BIT(2)
   #define LTC4282_METER_HALT_MASK		BIT(5)
   #define LTC4282_METER_RESET_MASK		BIT(6)
   #define LTC4282_RESET_MASK			BIT(7)
 #define LTC4282_STATUS_LSB			0x1E
   #define LTC4282_OV_STATUS_MASK		BIT(0)
   #define LTC4282_UV_STATUS_MASK		BIT(1)
-  #define LTC4282_VDD_STATUS_MASK		(LTC4282_OV_STATUS_MASK | LTC4282_UV_STATUS_MASK)
+  #define LTC4282_VDD_STATUS_MASK \
+		(LTC4282_OV_STATUS_MASK | LTC4282_UV_STATUS_MASK)
   #define LTC4282_OC_STATUS_MASK		BIT(2)
   #define LTC4282_POWER_GOOD_MASK		BIT(3)
   #define LTC4282_FET_SHORT_MASK		BIT(5)
   #define LTC4282_FET_BAD_STATUS_MASK		BIT(6)
 #define LTC4282_STATUS_MSB			0x1F
-  #define LTC4282_METER_TICK_OVERFLOW_MASK	GENMASK(1, 0)
   #define LTC4282_ALERT_STATUS_MASK		BIT(4)
   #define LTC4282_GPIO_1_STATUS_MASK		BIT(5)
   #define LTC4282_GPIO_2_STATUS_MASK		BIT(6)
@@ -115,31 +118,53 @@
 
 #define LTC4282_CLKIN_MIN	(250 * KILO)
 #define LTC4282_CLKIN_MAX	(15500 * KILO)
-/* this assumes 12bit ADC */
-#define LTC4282_TCONV_US	65535
+#define LTC4282_CLKOUT_SYSTEM	(250 * KILO)
+#define LTC4282_CLKOUT_CNV	15
+
 #define LTC4282_GPIO_NR		4
 /*
- * relaxed version of FIELD_PREP() to be used when mask is not a compile time constant
- * u32_encode_bits() can't also be used as the compiler needs to be able to evaluate
- * mask at compile time.
+ * relaxed version of FIELD_PREP() to be used when mask is not a compile time
+ * constant u32_encode_bits() can't also be used as the compiler needs to be
+ * able to evaluate mask at compile time.
  */
 #define LTC4282_FIELD_PREP(m, v)	(((v) << (ffs(m) - 1)) & (m))
 
+enum {
+	LTC4282_CHAN_VSOURCE,
+	LTC4282_CHAN_VDD,
+	LTC4282_CHAN_VGPIO,
+};
+
+struct ltc4282_cache {
+	u32 in_max_raw;
+	u32 in_min_raw;
+	long in_highest;
+	long in_lowest;
+	bool en;
+};
+
 struct ltc4282_state {
 	struct regmap *map;
-	struct device *dev;
 	/* Protect against multiple accesses to the device registers */
 	struct mutex lock;
 	struct gpio_chip gc;
-	u64 saved_energy;
+	struct clk_hw clk_hw;
+	/*
+	 * Used to cache values for VDD/VSOURCE depending which will be used
+	 * when hwmon is not enabled for that channel. Needed because they share
+	 * the same registers.
+	 */
+	struct ltc4282_cache in0_1_cache[LTC4282_CHAN_VGPIO];
+	unsigned long valid_mask;
 	long power_max;
-	u32 gpio_map[LTC4282_GPIO_NR];
 	u32 rsense;
 	u32 vin_mode;
 	u16 vfs_out;
+	bool energy_en;
 };
 
 struct ltc4282_gpio {
+	const char * const *funcs;
 	u32 out_reg;
 	u32 out_mask;
 	u32 in_reg;
@@ -156,16 +181,22 @@ enum {
 };
 
 enum {
-	LTC4282_CHAN_VSOURCE,
-	LTC4282_CHAN_VDD,
-	LTC4282_CHAN_VGPIO,
-};
-
-enum {
 	LTC4282_GPIO_1,
 	LTC4282_GPIO_2,
 	LTC4282_GPIO_3,
 	LTC4282_ALERT,
+};
+
+static const char * const ltc4282_gpio1_modes[] = {
+	"gpio", "power_bad", "power_good"
+};
+
+static const char * const ltc4282_gpio2_modes[] = {
+	"gpio", "adc_input", "stress_fet"
+};
+
+static const char * const ltc4282_gpio3_modes[] = {
+	"gpio", "adc_input"
 };
 
 static const struct ltc4282_gpio ltc4282_gpios[] = {
@@ -175,21 +206,24 @@ static const struct ltc4282_gpio ltc4282_gpios[] = {
 		.out_reg = LTC4282_GPIO_CONFIG,
 		.out_mask = LTC4282_GPIO_1_OUT_MASK,
 		.active_high = true,
-		.n_funcs = 3,
+		.funcs = ltc4282_gpio1_modes,
+		.n_funcs = ARRAY_SIZE(ltc4282_gpio1_modes),
 	},
 	[LTC4282_GPIO_2] = {
 		.in_reg = LTC4282_STATUS_MSB,
 		.in_mask = LTC4282_GPIO_2_STATUS_MASK,
 		.out_reg = LTC4282_GPIO_CONFIG,
 		.out_mask = LTC4282_GPIO_2_OUT_MASK,
-		.n_funcs = 3,
+		.funcs = ltc4282_gpio2_modes,
+		.n_funcs = ARRAY_SIZE(ltc4282_gpio2_modes),
 	},
 	[LTC4282_GPIO_3] = {
 		.in_reg = LTC4282_STATUS_MSB,
 		.in_mask = LTC4282_GPIO_3_STATUS_MASK,
 		.out_reg = LTC4282_GPIO_CONFIG,
 		.out_mask = LTC4282_GPIO_3_OUT_MASK,
-		.n_funcs = 2,
+		.funcs = ltc4282_gpio3_modes,
+		.n_funcs = ARRAY_SIZE(ltc4282_gpio3_modes),
 	},
 	[LTC4282_ALERT] = {
 		.in_reg = LTC4282_STATUS_MSB,
@@ -202,36 +236,40 @@ static const struct ltc4282_gpio ltc4282_gpios[] = {
 static int ltc4282_gpio_input_set(struct gpio_chip *chip, unsigned int offset)
 {
 	struct ltc4282_state *st = gpiochip_get_data(chip);
-	u32 gpio_pin = st->gpio_map[offset];
 
 	/* we can only control this for GPIO_1 */
-	if (gpio_pin != LTC4282_GPIO_1)
+	if (offset != LTC4282_GPIO_1)
 		return 0;
 
-	return regmap_set_bits(st->map, LTC4282_GPIO_CONFIG, LTC4282_GPIO_1_CONFIG_MASK);
+	return regmap_set_bits(st->map, LTC4282_GPIO_CONFIG,
+			       LTC4282_GPIO_1_CONFIG_MASK);
 }
 
-static int ltc4282_gpio_output_set(struct gpio_chip *chip, unsigned int offset, int val)
+static int ltc4282_gpio_output_set(struct gpio_chip *chip, unsigned int offset,
+				   int val)
 {
 	struct ltc4282_state *st = gpiochip_get_data(chip);
-	u32 gpio_pin = st->gpio_map[offset];
-	const struct ltc4282_gpio *gpio = &ltc4282_gpios[gpio_pin];
+	const struct ltc4282_gpio *gpio = &ltc4282_gpios[offset];
 
 	guard(mutex)(&st->lock);
 	/*
-	 * Explicitly setting the pin as output can only be done for GPIO_1. For the
-	 * other pins we just pull the line down or high-z.
+	 * Explicitly setting the pin as output can only be done for GPIO_1. For
+	 * the other pins we just pull the line down or high-z.
 	 */
-	if (gpio_pin == LTC4282_GPIO_1) {
+	if (offset == LTC4282_GPIO_1) {
 		int ret;
 
-		ret = regmap_update_bits(st->map, LTC4282_GPIO_CONFIG, LTC4282_GPIO_1_CONFIG_MASK,
+		ret = regmap_update_bits(st->map, LTC4282_GPIO_CONFIG,
+					 LTC4282_GPIO_1_CONFIG_MASK,
 					 FIELD_PREP(LTC4282_GPIO_1_CONFIG_MASK, 2));
 		if (ret)
 			return ret;
 	}
 
-	/* GPIO_2,3 and the ALERT pin require setting the bit to 1 to pull down the line */
+	/*
+	 * GPIO_2,3 and the ALERT pin require setting the bit to 1 to pull down
+	 * the line
+	 */
 	if (!gpio->active_high)
 		val = !val;
 
@@ -239,11 +277,11 @@ static int ltc4282_gpio_output_set(struct gpio_chip *chip, unsigned int offset, 
 				  LTC4282_FIELD_PREP(gpio->out_mask, val));
 }
 
-static void ltc4282_gpio_set(struct gpio_chip *chip, unsigned int offset, int val)
+static void ltc4282_gpio_set(struct gpio_chip *chip, unsigned int offset,
+			     int val)
 {
 	struct ltc4282_state *st = gpiochip_get_data(chip);
-	u32 gpio_pin = st->gpio_map[offset];
-	const struct ltc4282_gpio *gpio = &ltc4282_gpios[gpio_pin];
+	const struct ltc4282_gpio *gpio = &ltc4282_gpios[offset];
 
 	if (!gpio->active_high)
 		val = !val;
@@ -255,8 +293,7 @@ static void ltc4282_gpio_set(struct gpio_chip *chip, unsigned int offset, int va
 static int ltc4282_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct ltc4282_state *st = gpiochip_get_data(chip);
-	u32 gpio_pin = st->gpio_map[offset];
-	const struct ltc4282_gpio *gpio = &ltc4282_gpios[gpio_pin];
+	const struct ltc4282_gpio *gpio = &ltc4282_gpios[offset];
 	int ret;
 	u32 val;
 
@@ -267,7 +304,86 @@ static int ltc4282_gpio_get(struct gpio_chip *chip, unsigned int offset)
 	return !!(val & gpio->in_mask);
 }
 
-static int ltc4282_read_voltage_word(const struct ltc4282_state *st, u32 reg, u32 fs, long *val)
+static int ltc4282_gpio_valid_mask(struct gpio_chip *chip,
+				   unsigned long *valid_mask,
+				   unsigned int ngpios)
+{
+	struct ltc4282_state *st = gpiochip_get_data(chip);
+
+	*valid_mask = st->valid_mask;
+	return 0;
+}
+
+enum {
+	LTC4282_CLKOUT_NONE,
+	LTC4282_CLKOUT_INT,
+	LTC4282_CLKOUT_TICK,
+};
+
+static int ltc4282_set_rate(struct clk_hw *hw,
+			    unsigned long rate, unsigned long parent_rate)
+{
+	struct ltc4282_state *st = container_of(hw, struct ltc4282_state,
+						clk_hw);
+	u32 val = LTC4282_CLKOUT_INT;
+
+	pr_info("In set_rate %lu\n", rate);
+	if (rate == LTC4282_CLKOUT_CNV)
+		val = LTC4282_CLKOUT_TICK;
+
+	return regmap_update_bits(st->map, LTC4282_CLK_DIV, LTC4282_CLKOUT_MASK,
+				  FIELD_PREP(LTC4282_CLKOUT_MASK, val));
+}
+
+/*
+ * Note the 15HZ conversion rate assumes 12bit ADC which is what we are
+ * supporting for now.
+ */
+static unsigned int ltc4282_out_rates[] = {
+	LTC4282_CLKOUT_CNV, LTC4282_CLKOUT_SYSTEM
+};
+
+long ltc4282_round_rate(struct clk_hw *hw, unsigned long rate,
+			unsigned long *parent_rate)
+{
+	int idx = find_closest(rate, ltc4282_out_rates,
+			       ARRAY_SIZE(ltc4282_out_rates));
+
+	pr_info("In round_rate %u, %lu\n", idx, rate);
+	return ltc4282_out_rates[idx];
+}
+
+unsigned long ltc4282_recalc_rate(struct clk_hw *hw, unsigned long parent)
+{
+	struct ltc4282_state *st = container_of(hw, struct ltc4282_state,
+						clk_hw);
+	u32 clkdiv;
+	int ret;
+
+	ret = regmap_read(st->map, LTC4282_CLK_DIV, &clkdiv);
+	if (ret)
+		return 0;
+
+	clkdiv = FIELD_GET(LTC4282_CLKOUT_MASK, clkdiv);
+	pr_info("In recalc_rate %u\n", clkdiv);
+	if (!clkdiv)
+		return 0;
+	if (clkdiv == LTC4282_CLKOUT_INT)
+		return LTC4282_CLKOUT_SYSTEM;
+
+	return LTC4282_CLKOUT_CNV;
+}
+
+static void ltc4282_disable(struct clk_hw *clk_hw)
+{
+	struct ltc4282_state *st = container_of(clk_hw, struct ltc4282_state,
+						clk_hw);
+
+	regmap_clear_bits(st->map, LTC4282_CLK_DIV, LTC4282_CLKOUT_MASK);
+}
+
+static int ltc4282_read_voltage_word(const struct ltc4282_state *st, u32 reg,
+				     u32 fs, long *val)
 {
 	__be16 in;
 	int ret;
@@ -277,66 +393,43 @@ static int ltc4282_read_voltage_word(const struct ltc4282_state *st, u32 reg, u3
 		return ret;
 
 	/*
-	 * This is also used to calculate current in which case fs comes in 10 * uV.
-	 * Hence the ULL usage.
+	 * This is also used to calculate current in which case fs comes in
+	 * 10 * uV. Hence the ULL usage.
 	 */
 	*val = DIV_ROUND_CLOSEST_ULL(be16_to_cpu(in) * (u64)fs, U16_MAX);
 	return 0;
 }
 
-static int ltc4282_read_voltage_byte(const struct ltc4282_state *st, u32 reg, u32 fs, long *val)
+static int ltc4282_read_voltage_byte_cached(const struct ltc4282_state *st,
+					    u32 reg, u32 fs, long *val,
+					    u32 *cached_raw)
 {
 	int ret;
 	u32 in;
 
-	ret = regmap_read(st->map, reg, &in);
-	if (ret)
-		return ret;
+	if (cached_raw) {
+		in = *cached_raw;
+	} else {
+		ret = regmap_read(st->map, reg, &in);
+		if (ret)
+			return ret;
+	}
 
 	*val = DIV_ROUND_CLOSEST(in * fs, U8_MAX);
 	return 0;
 }
 
-static int ltc4282_read_vdd(struct ltc4282_state *st, u32 fs, long *val)
+static int ltc4282_read_voltage_byte(const struct ltc4282_state *st, u32 reg,
+				     u32 fs, long *val)
 {
-	int ret;
-
-	guard(mutex)(&st->lock);
-
-	/* ADC now monitors VDD */
-	ret = regmap_clear_bits(st->map, LTC4282_ILIM_ADJUST, LTC4282_VDD_MONITOR_MASK);
-	if (ret)
-		return ret;
-
-	/*
-	 * Wait for two ADC conversions so we are sure we get one full VDD
-	 * measurement.
-	 */
-	msleep(2 * LTC4282_TCONV_US / MILLI);
-
-	ret = ltc4282_read_voltage_word(st, LTC4282_VSOURCE, st->vfs_out, val);
-	if (ret)
-		return ret;
-
-	/* back to VSOURCE */
-	return regmap_set_bits(st->map, LTC4282_ILIM_ADJUST, LTC4282_VDD_MONITOR_MASK);
+	return ltc4282_read_voltage_byte_cached(st, reg, fs, val, NULL);
 }
 
-static int ltc4282_read_alarm(struct ltc4282_state *st, u32 reg, u32 mask, long *val)
+static int __ltc4282_read_alarm(struct ltc4282_state *st, u32 reg, u32 mask,
+				long *val)
 {
 	u32 alarm;
 	int ret;
-
-	guard(mutex)(&st->lock);
-
-	/* if not status, clear first the alarm by clearing the bit */
-	if (reg != LTC4282_STATUS_LSB && reg != LTC4282_FAULT_LOG) {
-		ret = regmap_clear_bits(st->map, reg, mask);
-		if (ret)
-			return ret;
-
-		msleep(LTC4282_TCONV_US / MILLI);
-	}
 
 	ret = regmap_read(st->map, reg, &alarm);
 	if (ret)
@@ -344,79 +437,165 @@ static int ltc4282_read_alarm(struct ltc4282_state *st, u32 reg, u32 mask, long 
 
 	*val = !!(alarm & mask);
 
+	/* if not status/fault logs, clear the alarm after reading it */
+	if (reg != LTC4282_STATUS_LSB && reg != LTC4282_FAULT_LOG)
+		return regmap_clear_bits(st->map, reg, mask);
+
 	return 0;
 }
 
-static int ltc4282_read_in(struct device *dev, u32 attr, long *val, u32 channel)
+static int ltc4282_read_alarm(struct ltc4282_state *st, u32 reg, u32 mask,
+			      long *val)
 {
-	struct ltc4282_state *st = dev_get_drvdata(dev);
+	guard(mutex)(&st->lock);
+	return __ltc4282_read_alarm(st, reg, mask, val);
+}
 
+static int ltc4282_vdd_source_read_in(struct ltc4282_state *st, u32 channel,
+				      long *val)
+{
+	guard(mutex)(&st->lock);
+	if (!st->in0_1_cache[channel].en)
+		return -ENODATA;
+
+	return ltc4282_read_voltage_word(st, LTC4282_VSOURCE, st->vfs_out, val);
+}
+
+static int ltc4282_vdd_source_read_hist(struct ltc4282_state *st, u32 reg,
+					u32 channel, long *cached, long *val)
+{
+	int ret;
+
+	guard(mutex)(&st->lock);
+	if (!st->in0_1_cache[channel].en) {
+		*val = *cached;
+		return 0;
+	}
+
+	ret = ltc4282_read_voltage_word(st, reg, st->vfs_out, val);
+	if (ret)
+		return ret;
+
+	*cached = *val;
+	return 0;
+}
+
+static int ltc4282_vdd_source_read_lim(struct ltc4282_state *st, u32 reg,
+				       u32 channel, u32 *cached, long *val)
+{
+	guard(mutex)(&st->lock);
+	if (!st->in0_1_cache[channel].en)
+		return ltc4282_read_voltage_byte_cached(st, reg, st->vfs_out,
+							val, cached);
+
+	return ltc4282_read_voltage_byte(st, reg, st->vfs_out, val);
+}
+
+static int ltc4282_vdd_source_read_alm(struct ltc4282_state *st, u32 mask,
+				       u32 channel, long *val)
+{
+	guard(mutex)(&st->lock);
+	if (!st->in0_1_cache[channel].en) {
+		/*
+		 * Do this otherwise alarms can get confused because we clear
+		 * them after reading them. So, if someone mistakenly reads
+		 * VSOURCE right before VDD (or the other way around), we might
+		 * get no alarm just because it was cleared when reading VSOURCE
+		 * and had no time for a new conversion and thus having the
+		 * alarm again.
+		 */
+		*val = 0;
+		return 0;
+	}
+
+	return __ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, mask, val);
+}
+
+static int ltc4282_read_in(struct ltc4282_state *st, u32 attr, long *val,
+			   u32 channel)
+{
 	switch (attr) {
 	case hwmon_in_input:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_voltage_word(st, LTC4282_VSOURCE, st->vfs_out, val);
-		if (channel == LTC4282_CHAN_VDD)
-			return ltc4282_read_vdd(st, st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_read_voltage_word(st, LTC4282_VGPIO,
+							 1280, val);
 
-		return ltc4282_read_voltage_word(st, LTC4282_VGPIO, 1280, val);
+		return ltc4282_vdd_source_read_in(st, channel, val);
 	case hwmon_in_highest:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_voltage_word(st, LTC4282_VSOURCE_HIGHEST,
-							 st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_read_voltage_word(st,
+							 LTC4282_VGPIO_HIGHEST,
+							 1280, val);
 
-		return ltc4282_read_voltage_word(st, LTC4282_VGPIO_HIGHEST, 1280, val);
+		return ltc4282_vdd_source_read_hist(st, LTC4282_VSOURCE_HIGHEST,
+						    channel,
+						    &st->in0_1_cache[channel].in_highest, val);
 	case hwmon_in_lowest:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_voltage_word(st, LTC4282_VSOURCE_LOWEST,
-							 st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			ltc4282_read_voltage_word(st, LTC4282_VGPIO_LOWEST,
+						  1280, val);
 
-		return ltc4282_read_voltage_word(st, LTC4282_VGPIO_LOWEST, 1280, val);
+		return ltc4282_vdd_source_read_hist(st, LTC4282_VSOURCE_LOWEST,
+						    channel,
+						    &st->in0_1_cache[channel].in_lowest, val);
 	case hwmon_in_max_alarm:
-		if (channel == LTC4282_CHAN_VSOURCE)
+		if (channel == LTC4282_CHAN_VGPIO)
 			return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
-						  LTC4282_VSOURCE_ALARM_H_MASK, val);
+						  LTC4282_GPIO_ALARM_H_MASK,
+						  val);
 
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_GPIO_ALARM_H_MASK,
-					  val);
+		return ltc4282_vdd_source_read_alm(st,
+						   LTC4282_VSOURCE_ALARM_H_MASK,
+						   channel, val);
 	case hwmon_in_min_alarm:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
-						  LTC4282_VSOURCE_ALARM_L_MASK, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
+					   LTC4282_GPIO_ALARM_L_MASK, val);
 
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_GPIO_ALARM_L_MASK,
-					  val);
-	case hwmon_in_alarm:
-		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB,
-					  LTC4282_FET_BAD_STATUS_MASK, val);
+		return ltc4282_vdd_source_read_alm(st,
+						   LTC4282_VSOURCE_ALARM_L_MASK,
+						   channel, val);
 	case hwmon_in_crit_alarm:
-		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB, LTC4282_OV_STATUS_MASK, val);
+		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB,
+					  LTC4282_OV_STATUS_MASK, val);
 	case hwmon_in_lcrit_alarm:
-		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB, LTC4282_UV_STATUS_MASK, val);
+		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB,
+					  LTC4282_UV_STATUS_MASK, val);
 	case hwmon_in_max:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_voltage_byte(st, LTC4282_VSOURCE_MAX,
-							 st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_read_voltage_byte(st, LTC4282_VGPIO_MAX,
+							 1280, val);
 
-		return ltc4282_read_voltage_byte(st, LTC4282_VGPIO_MAX, 1280, val);
+		return ltc4282_vdd_source_read_lim(st, LTC4282_VSOURCE_MAX,
+						   channel,
+						   &st->in0_1_cache[channel].in_max_raw, val);
 	case hwmon_in_min:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_read_voltage_byte(st, LTC4282_VSOURCE_MIN,
-							 st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_read_voltage_byte(st, LTC4282_VGPIO_MIN,
+							 1280, val);
 
-		return ltc4282_read_voltage_byte(st, LTC4282_VGPIO_MIN, 1280, val);
+		return ltc4282_vdd_source_read_lim(st, LTC4282_VSOURCE_MIN,
+						   channel,
+						   &st->in0_1_cache[channel].in_min_raw, val);
+	case hwmon_in_enable:
+		scoped_guard(mutex, &st->lock) {
+			*val = st->in0_1_cache[channel].en;
+		}
+		return 0;
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
-static int ltc4282_read_current_word(const struct ltc4282_state *st, u32 reg, long *val)
+static int ltc4282_read_current_word(const struct ltc4282_state *st, u32 reg,
+				     long *val)
 {
 	long in;
 	int ret;
 
 	/*
-	 * We pass in full scale in 10 * micro (note that 40 is already millivolt) so we
-	 * have better approximations to calculate current.
+	 * We pass in full scale in 10 * micro (note that 40 is already
+	 * millivolt) so we have better approximations to calculate current.
 	 */
 	ret = ltc4282_read_voltage_word(st, reg, DECA * 40 * MILLI, &in);
 	if (ret)
@@ -427,7 +606,8 @@ static int ltc4282_read_current_word(const struct ltc4282_state *st, u32 reg, lo
 	return 0;
 }
 
-static int ltc4282_read_current_byte(const struct ltc4282_state *st, u32 reg, long *val)
+static int ltc4282_read_current_byte(const struct ltc4282_state *st, u32 reg,
+				     long *val)
 {
 	long in;
 	int ret;
@@ -441,35 +621,38 @@ static int ltc4282_read_current_byte(const struct ltc4282_state *st, u32 reg, lo
 	return 0;
 }
 
-static int ltc4282_read_curr(struct device *dev, const u32 attr, long *val)
+static int ltc4282_read_curr(struct ltc4282_state *st, const u32 attr,
+			     long *val)
 {
-	struct ltc4282_state *st = dev_get_drvdata(dev);
-
 	switch (attr) {
 	case hwmon_curr_input:
 		return ltc4282_read_current_word(st, LTC4282_VSENSE, val);
 	case hwmon_curr_highest:
-		return ltc4282_read_current_word(st, LTC4282_VSENSE_HIGHEST, val);
+		return ltc4282_read_current_word(st, LTC4282_VSENSE_HIGHEST,
+						 val);
 	case hwmon_curr_lowest:
-		return ltc4282_read_current_word(st, LTC4282_VSENSE_LOWEST, val);
+		return ltc4282_read_current_word(st, LTC4282_VSENSE_LOWEST,
+						 val);
 	case hwmon_curr_max:
 		return ltc4282_read_current_byte(st, LTC4282_VSENSE_MAX, val);
 	case hwmon_curr_min:
 		return ltc4282_read_current_byte(st, LTC4282_VSENSE_MIN, val);
 	case hwmon_curr_max_alarm:
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_VSENSE_ALARM_H_MASK,
-					  val);
+		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
+					  LTC4282_VSENSE_ALARM_H_MASK, val);
 	case hwmon_curr_min_alarm:
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_VSENSE_ALARM_L_MASK,
-					  val);
+		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
+					  LTC4282_VSENSE_ALARM_L_MASK, val);
 	case hwmon_curr_crit_alarm:
-		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB, LTC4282_OC_STATUS_MASK, val);
+		return ltc4282_read_alarm(st, LTC4282_STATUS_LSB,
+					  LTC4282_OC_STATUS_MASK, val);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
-static int ltc4282_read_power_word(const struct ltc4282_state *st, u32 reg, long *val)
+static int ltc4282_read_power_word(const struct ltc4282_state *st, u32 reg,
+				   long *val)
 {
 	u64 temp =  DECA * 40ULL * st->vfs_out * 1 << 16, temp_2;
 	__be16 raw;
@@ -483,20 +666,23 @@ static int ltc4282_read_power_word(const struct ltc4282_state *st, u32 reg, long
 	power = be16_to_cpu(raw);
 	/*
 	 * Power is given by:
-	 *	P = CODE(16b) * 0.040 * Vfs(out) * 2^16 / ((2^16 - 1)^2 * Rsense)
+	 *     P = CODE(16b) * 0.040 * Vfs(out) * 2^16 / ((2^16 - 1)^2 * Rsense)
 	 */
 	if (check_mul_overflow(power * temp, MICRO, &temp_2)) {
 		temp = DIV_ROUND_CLOSEST_ULL(power * temp, U16_MAX);
-		*val = DIV64_U64_ROUND_CLOSEST(temp * MICRO, U16_MAX * (u64)st->rsense);
+		*val = DIV64_U64_ROUND_CLOSEST(temp * MICRO,
+					       U16_MAX * (u64)st->rsense);
 		return 0;
 	}
 
-	*val = DIV64_U64_ROUND_CLOSEST(temp_2, st->rsense * int_pow(U16_MAX, 2));
+	*val = DIV64_U64_ROUND_CLOSEST(temp_2,
+				       st->rsense * int_pow(U16_MAX, 2));
 
 	return 0;
 }
 
-static int ltc4282_read_power_byte(const struct ltc4282_state *st, u32 reg, long *val)
+static int ltc4282_read_power_byte(const struct ltc4282_state *st, u32 reg,
+				   long *val)
 {
 	u32 power;
 	u64 temp;
@@ -507,7 +693,8 @@ static int ltc4282_read_power_byte(const struct ltc4282_state *st, u32 reg, long
 		return ret;
 
 	temp = power * 40 * DECA * st->vfs_out * 256ULL;
-	*val = DIV64_U64_ROUND_CLOSEST(temp * MICRO, int_pow(U8_MAX, 2) * st->rsense);
+	*val = DIV64_U64_ROUND_CLOSEST(temp * MICRO,
+				       int_pow(U8_MAX, 2) * st->rsense);
 
 	return 0;
 }
@@ -515,7 +702,6 @@ static int ltc4282_read_power_byte(const struct ltc4282_state *st, u32 reg, long
 static int ltc4282_read_energy(const struct ltc4282_state *st, u64 *val)
 {
 	u64 temp, energy;
-	u32 status;
 	__be64 raw;
 	int ret;
 
@@ -523,113 +709,33 @@ static int ltc4282_read_energy(const struct ltc4282_state *st, u64 *val)
 	if (ret)
 		return ret;
 
-	ret = regmap_read(st->map, LTC4282_STATUS_MSB, &status);
-	if (ret)
-		return ret;
-
-	if (status & LTC4282_METER_TICK_OVERFLOW_MASK) {
-		dev_warn(st->dev, "Got overflow in meter/ticker counters\n");
-		/*
-		 * This resets the meter and the tick counter and holds them
-		 * reset.
-		 */
-		ret = regmap_set_bits(st->map, LTC4282_ADC_CTRL,
-				      LTC4282_METER_RESET_MASK);
-		if (ret)
-			return ret;
-
-		/* start accumulating again */
-		ret = regmap_clear_bits(st->map, LTC4282_ADC_CTRL,
-					LTC4282_METER_RESET_MASK);
-		if (ret)
-			return ret;
-
-		/*
-		 * Let the callers know a reset happened. Important when calling
-		 * from power1_average.
-		 */
-		ret = 1;
-	}
-
 	energy =  be64_to_cpu(raw) >> 16;
 	/*
 	 * The formula for energy is given by:
-	 *	E = CODE(48b) * 0.040 * Vfs(out) * Tconv * 256 / ((2^16 - 1)^2 * Rsense)
+	 *	E = CODE(48b) * 0.040 * Vfs(out) * Tconv * 256 /
+	 *						((2^16 - 1)^2 * Rsense)
 	 *
-	 * Since we only support 12bit ADC, Tconv = 0.065535s. Passing Vfs(out) and 0.040 to
-	 * mV and Tconv to us, we can simplify the formula to:
+	 * Since we only support 12bit ADC, Tconv = 0.065535s. Passing Vfs(out)
+	 * and 0.040 to mV and Tconv to us, we can simplify the formula to:
 	 *	E = CODE(48b) * 40 * Vfs(out) * 256 / (U16_MAX * Rsense)
 	 *
-	 * As Rsense is in tens of micro-ohm, we need to multiply by DECA to get
-	 * microujoule.
+	 * As Rsense can have tenths of micro-ohm resolution, we need to
+	 * multiply by DECA to get microujoule.
 	 */
 	if (check_mul_overflow(DECA * st->vfs_out * 40 * 256, energy, &temp)) {
 		temp = DIV_ROUND_CLOSEST(DECA * st->vfs_out * 40 * 256, U16_MAX);
 		*val = DIV_ROUND_CLOSEST_ULL(temp * energy, st->rsense);
-		return ret;
+		return 0;
 	}
 
 	*val = DIV64_U64_ROUND_CLOSEST(temp, U16_MAX * (u64)st->rsense);
 
-	return ret;
-}
-
-static int ltc4282_read_power_average(struct ltc4282_state *st, long *val)
-{
-	u64 energy, temp;
-	__be32 raw;
-	u32 count;
-	int ret;
-
-	guard(mutex)(&st->lock);
-
-	ret = ltc4282_read_energy(st, &energy);
-	if (ret < 0)
-		return ret;
-	if (ret == 1) {
-		/*
-		 * reset happened... let's read the new energy value that
-		 * together with the new tick counter should give a sane average
-		 * value. Furthermore, we save whatever value we had accumulated
-		 * so that the next energy read will have it into account.
-		 */
-		st->saved_energy = energy;
-		/* give some time for accumulation... */
-		msleep(2 * LTC4282_TCONV_US / MILLI);
-		ret = ltc4282_read_energy(st, &energy);
-		if (ret < 0)
-			return ret;
-	}
-
-	ret = regmap_bulk_read(st->map, LTC4282_TIME_COUNTER, &raw, sizeof(raw));
-	if (ret)
-		return ret;
-
-	count = be32_to_cpu(raw);
-	if (!count) {
-		*val = 0;
-		return 0;
-	}
-
-	/*
-	 * AVG = E / (Tconv * counter)
-	 * We get energy in microJoule, hence dividing it by microSeconds gives Watts. Therefore,
-	 * multiplying by MICRO gives us microWatts.
-	 */
-	if (check_mul_overflow(energy, MICRO, &temp)) {
-		temp = DIV_ROUND_CLOSEST_ULL(energy, LTC4282_TCONV_US);
-		*val = DIV_ROUND_CLOSEST_ULL(temp * MICRO, count);
-		return 0;
-	}
-
-	*val = DIV64_U64_ROUND_CLOSEST(temp, LTC4282_TCONV_US * (u64)count);
 	return 0;
 }
 
-static int ltc4282_read_power(struct device *dev, const u32 attr, long *val)
+static int ltc4282_read_power(struct ltc4282_state *st, const u32 attr,
+			      long *val)
 {
-	struct ltc4282_state *st = dev_get_drvdata(dev);
-
 	switch (attr) {
 	case hwmon_power_input:
 		return ltc4282_read_power_word(st, LTC4282_POWER, val);
@@ -638,55 +744,44 @@ static int ltc4282_read_power(struct device *dev, const u32 attr, long *val)
 	case hwmon_power_input_lowest:
 		return ltc4282_read_power_word(st, LTC4282_POWER_LOWEST, val);
 	case hwmon_power_max_alarm:
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_POWER_ALARM_H_MASK,
-					  val);
+		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
+					  LTC4282_POWER_ALARM_H_MASK, val);
 	case hwmon_power_min_alarm:
-		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG, LTC4282_POWER_ALARM_L_MASK,
-					  val);
-	case hwmon_power_average:
-		return ltc4282_read_power_average(st, val);
+		return ltc4282_read_alarm(st, LTC4282_ADC_ALERT_LOG,
+					  LTC4282_POWER_ALARM_L_MASK, val);
 	case hwmon_power_max:
 		return ltc4282_read_power_byte(st, LTC4282_POWER_MAX, val);
 	case hwmon_power_min:
 		return ltc4282_read_power_byte(st, LTC4282_POWER_MIN, val);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
-}
-
-static int ltc4282_energy_enable(struct device *dev, long *val)
-{
-	const struct ltc4282_state *st = dev_get_drvdata(dev);
-	u32 reg_val;
-	int ret;
-
-	ret = regmap_read(st->map, LTC4282_ADC_CTRL, &reg_val);
-	if (ret)
-		return ret;
-
-	*val = !FIELD_GET(LTC4282_METER_HALT_MASK, reg_val);
-
-	return 0;
 }
 
 static int ltc4282_read(struct device *dev, enum hwmon_sensor_types type,
 			u32 attr, int channel, long *val)
 {
+	struct ltc4282_state *st = dev_get_drvdata(dev);
+
 	switch (type) {
 	case hwmon_in:
-		return ltc4282_read_in(dev, attr, val, channel);
+		return ltc4282_read_in(st, attr, val, channel);
 	case hwmon_curr:
-		return ltc4282_read_curr(dev, attr, val);
+		return ltc4282_read_curr(st, attr, val);
 	case hwmon_power:
-		return ltc4282_read_power(dev, attr, val);
+		return ltc4282_read_power(st, attr, val);
 	case hwmon_energy:
-		return ltc4282_energy_enable(dev, val);
+		scoped_guard(mutex, &st->lock) {
+			*val = st->energy_en;
+		}
+		return 0;
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
-static int ltc4282_write_power_byte(const struct ltc4282_state *st, u32 reg, long val)
+static int ltc4282_write_power_byte(const struct ltc4282_state *st, u32 reg,
+				    long val)
 {
 	u32 power;
 	u64 temp;
@@ -695,12 +790,42 @@ static int ltc4282_write_power_byte(const struct ltc4282_state *st, u32 reg, lon
 		val = st->power_max;
 
 	temp = val * int_pow(U8_MAX, 2) * st->rsense;
-	power = DIV64_U64_ROUND_CLOSEST(temp, MICRO * DECA * 256ULL * st->vfs_out * 40);
+	power = DIV64_U64_ROUND_CLOSEST(temp,
+					MICRO * DECA * 256ULL * st->vfs_out * 40);
 
 	return regmap_write(st->map, reg, power);
 }
 
-static int ltc4282_write_power(const struct ltc4282_state *st, u32 attr,
+static int __ltc4282_write_history(const struct ltc4282_state *st, u32 reg,
+				   long lowest, long highest)
+{
+	__be16 __raw;
+	u16 tmp;
+	int ret;
+
+	tmp = DIV_ROUND_CLOSEST(U16_MAX * lowest, st->vfs_out);
+
+	__raw = cpu_to_be16(tmp);
+
+	ret = regmap_bulk_write(st->map, reg, &__raw, 2);
+	if (ret)
+		return ret;
+
+	tmp = DIV_ROUND_CLOSEST(U16_MAX * highest, st->vfs_out);
+
+	__raw = cpu_to_be16(tmp);
+
+	return regmap_bulk_write(st->map, reg + 2, &__raw, 2);
+}
+
+static int ltc4282_write_history(struct ltc4282_state *st, u32 reg, long lowest,
+				 long highest)
+{
+	guard(mutex)(&st->lock);
+	return __ltc4282_write_history(st, reg, lowest, highest);
+}
+
+static int ltc4282_write_power(struct ltc4282_state *st, u32 attr,
 			       long val)
 {
 	switch (attr) {
@@ -708,12 +833,16 @@ static int ltc4282_write_power(const struct ltc4282_state *st, u32 attr,
 		return ltc4282_write_power_byte(st, LTC4282_POWER_MAX, val);
 	case hwmon_power_min:
 		return ltc4282_write_power_byte(st, LTC4282_POWER_MIN, val);
+	case hwmon_power_reset_history:
+		return ltc4282_write_history(st, LTC4282_POWER_LOWEST, 0, 0);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
-static int ltc4282_write_voltage_byte(const struct ltc4282_state *st, u32 reg, u32 fs, long val)
+static int ltc4282_write_voltage_byte_cached(const struct ltc4282_state *st,
+					     u32 reg, u32 fs, long val,
+					     u32 *cache_raw)
 {
 	u32 in;
 
@@ -722,32 +851,183 @@ static int ltc4282_write_voltage_byte(const struct ltc4282_state *st, u32 reg, u
 	else
 		in = DIV_ROUND_CLOSEST(val * U8_MAX, fs);
 
+	if (cache_raw) {
+		*cache_raw = in;
+		return 0;
+	}
+
 	return regmap_write(st->map, reg, in);
 }
 
-static int ltc4282_write_in(const struct ltc4282_state *st, u32 attr, long val,
+static int ltc4282_write_voltage_byte(const struct ltc4282_state *st, u32 reg,
+				      u32 fs, long val)
+{
+	return ltc4282_write_voltage_byte_cached(st, reg, fs, val, NULL);
+}
+
+static int ltc4282_cache_history(struct ltc4282_state *st, u32 channel)
+{
+	long val;
+	int ret;
+
+	ret = ltc4282_read_voltage_word(st, LTC4282_VSOURCE_LOWEST, st->vfs_out,
+					&val);
+	if (ret)
+		return ret;
+
+	st->in0_1_cache[channel].in_lowest = val;
+
+	ret = ltc4282_read_voltage_word(st, LTC4282_VSOURCE_HIGHEST,
+					st->vfs_out, &val);
+	if (ret)
+		return ret;
+
+	st->in0_1_cache[channel].in_highest = val;
+
+	ret = regmap_read(st->map, LTC4282_VSOURCE_MIN,
+			  &st->in0_1_cache[channel].in_min_raw);
+	if (ret)
+		return ret;
+
+	return regmap_read(st->map, LTC4282_VSOURCE_MAX,
+			  &st->in0_1_cache[channel].in_max_raw);
+}
+
+static int ltc4282_cache_sync(struct ltc4282_state *st, u32 channel)
+{
+	int ret;
+
+	ret = __ltc4282_write_history(st, LTC4282_VSOURCE_LOWEST,
+				      st->in0_1_cache[channel].in_lowest,
+				      st->in0_1_cache[channel].in_highest);
+	if (ret)
+		return ret;
+
+	ret = regmap_write(st->map, LTC4282_VSOURCE_MIN,
+			   st->in0_1_cache[channel].in_min_raw);
+
+	return regmap_write(st->map, LTC4282_VSOURCE_MAX,
+			    st->in0_1_cache[channel].in_max_raw);
+}
+
+static int ltc4282_vdd_source_write_lim(struct ltc4282_state *st, u32 reg,
+					int channel, u32 *cache, long val)
+{
+	int ret;
+
+	guard(mutex)(&st->lock);
+	if (st->in0_1_cache[channel].en)
+		ret = ltc4282_write_voltage_byte(st, reg, st->vfs_out, val);
+	else
+		ret = ltc4282_write_voltage_byte_cached(st, reg, st->vfs_out,
+							val, cache);
+
+	return ret;
+}
+
+static int ltc4282_vdd_source_write_hist(struct ltc4282_state *st, int channel)
+{
+	int ret;
+
+	guard(mutex)(&st->lock);
+	if (st->in0_1_cache[channel].en) {
+		ret = __ltc4282_write_history(st, LTC4282_VSOURCE_LOWEST, 0, 0);
+		if (ret)
+			return ret;
+	}
+
+	st->in0_1_cache[channel].in_lowest = 0;
+	st->in0_1_cache[channel].in_highest = 0;
+
+	return 0;
+}
+
+/*
+ * We need to mux between VSOURCE and VDD which means they are mutually
+ * exclusive. Moreover, we can't really disable both VDD and VSOURCE as the ADC
+ * is continuously running (we cannot independently halt it without also
+ * stopping VGPIO). Hence, the logic is that disabling or enabling VDD will
+ * automatically have the reverse effect on VSOURCE and vice-versa.
+ */
+static int ltc4282_vdd_source_enable(struct ltc4282_state *st, int channel,
+				     long val)
+{
+	int ret, other_chan = ~channel & 0x1;
+	u8 __val = val;
+
+	guard(mutex)(&st->lock);
+	if (st->in0_1_cache[channel].en == !!val)
+		return 0;
+
+	/* clearing the bit makes the ADC to monitor VDD */
+	if (channel == LTC4282_CHAN_VDD)
+		__val = !__val;
+
+	ret = regmap_update_bits(st->map, LTC4282_ILIM_ADJUST,
+				 LTC4282_VDD_MONITOR_MASK,
+				 FIELD_PREP(LTC4282_VDD_MONITOR_MASK, !!__val));
+	if (ret)
+		return ret;
+
+	st->in0_1_cache[channel].en = !!val;
+	st->in0_1_cache[other_chan].en = !val;
+
+	if (st->in0_1_cache[channel].en) {
+		/*
+		 * Then, we are disabling @other_chan. Let's save it's current
+		 * history.
+		 */
+		ret = ltc4282_cache_history(st, other_chan);
+		if (ret)
+			return ret;
+
+		return ltc4282_cache_sync(st, channel);
+	}
+	/*
+	 * Then, we are enabling @other_chan. We need to do the opposite from
+	 * above.
+	 */
+	ret = ltc4282_cache_history(st, channel);
+	if (ret)
+		return ret;
+
+	return ltc4282_cache_sync(st, other_chan);
+}
+
+static int ltc4282_write_in(struct ltc4282_state *st, u32 attr, long val,
 			    int channel)
 {
 	switch (attr) {
 	case hwmon_in_max:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_write_voltage_byte(st, LTC4282_VSOURCE_MAX,
-							  st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_write_voltage_byte(st, LTC4282_VGPIO_MAX,
+							  1280, val);
 
-		return ltc4282_write_voltage_byte(st, LTC4282_VGPIO_MAX, 1280, val);
+		return ltc4282_vdd_source_write_lim(st, LTC4282_VSOURCE_MAX,
+						    channel,
+						    &st->in0_1_cache[channel].in_max_raw, val);
 	case hwmon_in_min:
-		if (channel == LTC4282_CHAN_VSOURCE)
-			return ltc4282_write_voltage_byte(st, LTC4282_VSOURCE_MIN,
-							  st->vfs_out, val);
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_write_voltage_byte(st, LTC4282_VGPIO_MIN,
+							  1280, val);
 
-		return ltc4282_write_voltage_byte(st, LTC4282_VGPIO_MIN, 1280, val);
+		return ltc4282_vdd_source_write_lim(st, LTC4282_VSOURCE_MIN,
+						    channel,
+						    &st->in0_1_cache[channel].in_min_raw, val);
+	case hwmon_in_reset_history:
+		if (channel == LTC4282_CHAN_VGPIO)
+			return ltc4282_write_history(st, LTC4282_VGPIO_LOWEST,
+						     0, 0);
+
+		return ltc4282_vdd_source_write_hist(st, channel);
+	case hwmon_in_enable:
+		return ltc4282_vdd_source_enable(st, channel, val);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
-
 }
 
-static int ltc4282_write_curr(const struct ltc4282_state *st, u32 attr,
+static int ltc4282_write_curr(struct ltc4282_state *st, u32 attr,
 			      long val)
 {
 	/* need to pass it in millivolt */
@@ -755,19 +1035,40 @@ static int ltc4282_write_curr(const struct ltc4282_state *st, u32 attr,
 
 	switch (attr) {
 	case hwmon_curr_max:
-		return ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MAX, 40, in);
+		return ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MAX, 40,
+						  in);
 	case hwmon_curr_min:
-		return ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MIN, 40, in);
+		return ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MIN, 40,
+						  in);
+	case hwmon_curr_reset_history:
+		return ltc4282_write_history(st, LTC4282_VSENSE_LOWEST, 0, 0);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
+}
+
+static int ltc4282_energy_enable_set(struct ltc4282_state *st, long val)
+{
+	int ret;
+
+	guard(mutex)(&st->lock);
+	/* setting the bit halts the meter */
+	ret = regmap_update_bits(st->map, LTC4282_ADC_CTRL,
+				 LTC4282_METER_HALT_MASK,
+				 FIELD_PREP(LTC4282_METER_HALT_MASK, !val));
+	if (ret)
+		return ret;
+
+	st->energy_en = !!val;
+
+	return 0;
 }
 
 static int ltc4282_write(struct device *dev,
 			 enum hwmon_sensor_types type,
 			 u32 attr, int channel, long val)
 {
-	const struct ltc4282_state *st = dev_get_drvdata(dev);
+	struct ltc4282_state *st = dev_get_drvdata(dev);
 
 	switch (type) {
 	case hwmon_power:
@@ -777,12 +1078,9 @@ static int ltc4282_write(struct device *dev,
 	case hwmon_curr:
 		return ltc4282_write_curr(st, attr, val);
 	case hwmon_energy:
-		/* setting the bit halts the meter */
-		return regmap_update_bits(st->map, LTC4282_ADC_CTRL,
-					  LTC4282_METER_HALT_MASK,
-					  FIELD_PREP(LTC4282_METER_HALT_MASK, !!!val));
+		return ltc4282_energy_enable_set(st, val);
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
@@ -800,6 +1098,8 @@ static int ltc4282_in_is_visible(const struct ltc4282_state *st, u32 attr)
 		return 0444;
 	case hwmon_in_max:
 	case hwmon_in_min:
+	case hwmon_in_enable:
+	case hwmon_in_reset_history:
 		return 0644;
 	default:
 		return 0;
@@ -819,6 +1119,7 @@ static int ltc4282_curr_is_visible(u32 attr)
 		return 0444;
 	case hwmon_curr_max:
 	case hwmon_curr_min:
+	case hwmon_curr_reset_history:
 		return 0644;
 	default:
 		return 0;
@@ -834,10 +1135,10 @@ static int ltc4282_power_is_visible(u32 attr)
 	case hwmon_power_label:
 	case hwmon_power_max_alarm:
 	case hwmon_power_min_alarm:
-	case hwmon_power_average:
 		return 0444;
 	case hwmon_power_max:
 	case hwmon_power_min:
+	case hwmon_power_reset_history:
 		return 0644;
 	default:
 		return 0;
@@ -859,7 +1160,7 @@ static umode_t ltc4282_is_visible(const void *data,
 		/* hwmon_energy_enable */
 		return 0644;
 	default:
-		return -ENOTSUPP;
+		return 0;
 	}
 }
 
@@ -882,7 +1183,7 @@ static int ltc4282_read_labels(struct device *dev,
 		*str = "Power";
 		return 0;
 	default:
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 }
 
@@ -891,148 +1192,110 @@ static ssize_t ltc4282_show_energy(struct device *dev,
 {
 	struct ltc4282_state *st = dev_get_drvdata(dev);
 	u64 energy;
-	long en;
 	int ret;
 
 	guard(mutex)(&st->lock);
-
-	ret = ltc4282_energy_enable(dev, &en);
-	if (ret)
-		return ret;
-	if (!en)
+	if (!st->energy_en)
 		return -ENODATA;
 
 	ret = ltc4282_read_energy(st, &energy);
 	if (ret < 0)
 		return ret;
 
-	/* see @ltc4282_read_power_average */
-	if (st->saved_energy) {
-		energy += st->saved_energy;
-		st->saved_energy = 0;
-	}
-
 	return sysfs_emit(buf, "%llu\n", energy);
 }
 
-static ssize_t ltc4282_show_fault(struct device *dev,
-				  struct device_attribute *da,
-				  u32 reg, char *buf)
+static ssize_t ltc4282_show_status(struct device *dev,
+				   struct device_attribute *da, char *buf)
 {
 	struct ltc4282_state *st = dev_get_drvdata(dev);
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
 	long alarm;
 	int ret;
 
-	ret = ltc4282_read_alarm(st, reg, attr->index, &alarm);
+	ret = ltc4282_read_alarm(st, LTC4282_STATUS_LSB, attr->index, &alarm);
 	if (ret)
 		return ret;
 
 	return sysfs_emit(buf, "%lu\n", alarm);
 }
 
-static ssize_t ltc4282_show_status(struct device *dev,
-				   struct device_attribute *da, char *buf)
-{
-	return ltc4282_show_fault(dev, da, LTC4282_STATUS_LSB, buf);
-}
-
-static ssize_t ltc4282_show_fault_log(struct device *dev,
-				      struct device_attribute *da, char *buf)
-{
-	return ltc4282_show_fault(dev, da, LTC4282_FAULT_LOG, buf);
-}
-
-static ssize_t ltc4282_clear_fault_log(struct device *dev,
-				       struct device_attribute *da,
-				       const char *buf, size_t len)
+static ssize_t ltc4282_clear_faults(struct device *dev,
+				    struct device_attribute *da,
+				    const char *buf, size_t len)
 {
 	struct ltc4282_state *st = dev_get_drvdata(dev);
-	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
 	int ret;
 
-	ret = regmap_clear_bits(st->map, LTC4282_FAULT_LOG, attr->index);
+	ret = regmap_write(st->map, LTC4282_FAULT_LOG, 0);
 	if (ret)
 		return ret;
 
 	return len;
 }
 
-static int ltc4282_power_on(const struct ltc4282_state *st)
-{
-	u32 n_tries = 5, reg;
-	int ret;
-
-	ret = devm_regulator_get_enable(st->dev, "vdd");
-	if (ret)
-		return dev_err_probe(st->dev, ret, "Failed vdd get/enable\n");
-
-	/*
-	 * Make sure vdd is stable. From the datasheet:
-	 * The state of the UV and OV comparators is indicated by the STATUS register
-	 * bits 0 and 1 and must be stable for at least 50ms to qualify for turn-on.
-	 */
-	do {
-		ret = regmap_read_poll_timeout(st->map, LTC4282_STATUS_LSB, reg,
-					       reg & LTC4282_VDD_STATUS_MASK, 10000, 50000);
-		if (!ret)
-			continue;
-		if (ret != -ETIMEDOUT)
-			return dev_err_probe(st->dev, ret, "Failed regmap read\n");
-
-		/* Alright. We got timeout which means UV and OV are stable for 50ms */
-		break;
-	} while (n_tries--);
-
-	if (!n_tries)
-		return dev_err_probe(st->dev, -ETIMEDOUT, "VDD not stable\n");
-
-	return 0;
-}
-
-enum {
-	LTC4282_CLKOUT_INT,
-	LTC4282_CLKOUT_TICK,
+static const struct clk_ops ltc4282_ops = {
+	.recalc_rate = ltc4282_recalc_rate,
+	.round_rate = ltc4282_round_rate,
+	.set_rate = ltc4282_set_rate,
+	.disable = ltc4282_disable,
 };
 
-static int ltc428_clks_setup(const struct ltc4282_state *st)
+static int ltc428_clk_provider_setup(struct ltc4282_state *st,
+				     struct device *dev)
+{
+	struct clk_init_data init;
+	int ret;
+
+	if (!IS_ENABLED(CONFIG_COMMON_CLK))
+		return 0;
+
+	init.name = "ltc4282-clk";
+	init.ops = &ltc4282_ops;
+	init.flags = CLK_GET_RATE_NOCACHE;
+	st->clk_hw.init = &init;
+
+	ret = devm_clk_hw_register(dev, &st->clk_hw);
+	if (ret)
+		return ret;
+
+	return devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get,
+					   &st->clk_hw);
+}
+
+static int ltc428_clks_setup(struct ltc4282_state *st, struct device *dev)
 {
 	unsigned long rate;
 	struct clk *clkin;
 	u32 val;
 	int ret;
 
-	ret = device_property_read_u32(st->dev, "adi,clkout-mode", &val);
-	if (ret)
-		return 0;
-
-	if (val > LTC4282_CLKOUT_TICK)
-		return dev_err_probe(st->dev, -EINVAL,
-				     "Invalid val(%u) for adi,clkout-mode\n", val);
-
-	ret = regmap_update_bits(st->map, LTC4282_CLK_DIV, LTC4282_CLKOUT_MASK,
-				 FIELD_PREP(LTC4282_CLKOUT_MASK, val + 1));
+	ret = ltc428_clk_provider_setup(st, dev);
 	if (ret)
 		return ret;
 
-	clkin = devm_clk_get_optional_enabled(st->dev, NULL);
+	clkin = devm_clk_get_optional_enabled(dev, NULL);
 	if (IS_ERR(clkin))
-		return dev_err_probe(st->dev, PTR_ERR(clkin), "Failed to get clkin");
+		return dev_err_probe(dev, PTR_ERR(clkin),
+				     "Failed to get clkin");
 	if (!clkin)
 		return 0;
 
 	rate = clk_get_rate(clkin);
 	if (rate < LTC4282_CLKIN_MIN || rate > LTC4282_CLKIN_MAX)
-		return dev_err_probe(st->dev, -EINVAL, "Invalid clkin range(%lu) [%lu %lu]\n",
-				     rate, LTC4282_CLKIN_MIN, LTC4282_CLKIN_MAX);
+		return dev_err_probe(dev, -EINVAL,
+				     "Invalid clkin range(%lu) [%lu %lu]\n",
+				     rate, LTC4282_CLKIN_MIN,
+				     LTC4282_CLKIN_MAX);
 
 	/*
-	 * Clocks faster than 250KHZ should be reduced to 250KHZ. The clock frequency
-	 * is divided by twice the value in the register.
+	 * Clocks faster than 250KHZ should be reduced to 250KHZ. The clock
+	 * frequency is divided by twice the value in the register.
 	 */
 	val = rate / (2 * LTC4282_CLKIN_MIN);
 
-	return regmap_update_bits(st->map, LTC4282_CLK_DIV, LTC4282_CLK_DIV_MASK,
+	return regmap_update_bits(st->map, LTC4282_CLK_DIV,
+				  LTC4282_CLK_DIV_MASK,
 				  FIELD_PREP(LTC4282_CLK_DIV_MASK, val));
 }
 
@@ -1044,6 +1307,12 @@ static int ltc4282_get_defaults(struct ltc4282_state *st, u32 *curr_lim_uv)
 {
 	u32 reg_val, ilm_adjust;
 	int ret;
+
+	ret = regmap_read(st->map, LTC4282_ADC_CTRL, &reg_val);
+	if (ret)
+		return ret;
+
+	st->energy_en = !FIELD_GET(LTC4282_METER_HALT_MASK, reg_val);
 
 	ret = regmap_read(st->map, LTC4282_CTRL_MSB, &reg_val);
 	if (ret)
@@ -1058,20 +1327,31 @@ static int ltc4282_get_defaults(struct ltc4282_state *st, u32 *curr_lim_uv)
 	ilm_adjust = FIELD_GET(LTC4282_ILIM_ADJUST_MASK, reg_val);
 	*curr_lim_uv = ltc4282_curr_lim_uv[ilm_adjust];
 
-	return 0;
+	st->in0_1_cache[LTC4282_CHAN_VSOURCE].en = FIELD_GET(LTC4282_VDD_MONITOR_MASK,
+							     ilm_adjust);
+	if (!st->in0_1_cache[LTC4282_CHAN_VSOURCE].en) {
+		st->in0_1_cache[LTC4282_CHAN_VDD].en = true;
+		return regmap_read(st->map, LTC4282_VSOURCE_MAX,
+				   &st->in0_1_cache[LTC4282_CHAN_VSOURCE].in_max_raw);
+	}
+
+	return regmap_read(st->map, LTC4282_VSOURCE_MAX,
+			   &st->in0_1_cache[LTC4282_CHAN_VDD].in_max_raw);
 }
 
 /*
- * Set max limits for ISENSE and Power as that depends on the max voltage on rsense
- * that is defined in ILIM_ADJUST. This is specially important for power because for
- * some rsense and vfsout values, if we allow the default raw 255 value, that would
- * overflow long in 32bit archs when reading back the max power limit.
+ * Set max limits for ISENSE and Power as that depends on the max voltage on
+ * rsense that is defined in ILIM_ADJUST. This is specially important for power
+ * because for some rsense and vfsout values, if we allow the default raw 255
+ * value, that would overflow long in 32bit archs when reading back the max
+ * power limit.
  */
 static int ltc4282_set_max_limits(struct ltc4282_state *st, u32 val_uv)
 {
 	int ret;
 
-	ret = ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MAX, 40 * MILLI, val_uv);
+	ret = ltc4282_write_voltage_byte(st, LTC4282_VSENSE_MAX, 40 * MILLI,
+					 val_uv);
 	if (ret)
 		return ret;
 
@@ -1080,31 +1360,23 @@ static int ltc4282_set_max_limits(struct ltc4282_state *st, u32 val_uv)
 	return ltc4282_write_power_byte(st, LTC4282_POWER_MAX, st->power_max);
 }
 
-/* valid GPIO functions */
-enum {
-	LTC4282_PIN_GPIO,
-	/* Power functions only for GPIO_1*/
-	LTC4282_PIN_POWER_BAD,
-	LTC4282_PIN_POWER_GOOD,
-	/* ADC monitor only for GPIO_2 and 3 */
-	LTC4282_PIN_ADC = 2,
-	/* Only for GPIO_2 */
-	LTC4282_PIN_FET_STRESS,
-};
-
-static int ltc4282_non_gpio_setup(struct ltc4282_state *st, u32 pin, u32 func, bool *adc_in)
+static int ltc4282_non_gpio_setup(struct ltc4282_state *st,
+				  const struct device *dev, u32 pin,
+				  const char *func, bool *adc_in)
 {
 	if (pin == LTC4282_GPIO_1) {
-		u32 val = LTC4282_PIN_POWER_BAD;
+		/* power_good */
+		u32 val = 0;
 
-		if (func == LTC4282_PIN_POWER_GOOD)
-			val = 0;
+		if (!strcmp(func, "power_bad"))
+			val = 1;
 
-		return regmap_update_bits(st->map, LTC4282_GPIO_CONFIG, LTC4282_GPIO_1_CONFIG_MASK,
+		return regmap_update_bits(st->map, LTC4282_GPIO_CONFIG,
+					  LTC4282_GPIO_1_CONFIG_MASK,
 					  FIELD_PREP(LTC4282_GPIO_1_CONFIG_MASK, val));
 	}
 
-	if (func == LTC4282_PIN_FET_STRESS)
+	if (!strcmp(func, "stress_fet"))
 		return regmap_update_bits(st->map, LTC4282_GPIO_CONFIG,
 					  LTC4282_GPIO_2_FET_STRESS_MASK,
 					  FIELD_PREP(LTC4282_GPIO_2_FET_STRESS_MASK, 1));
@@ -1114,13 +1386,14 @@ static int ltc4282_non_gpio_setup(struct ltc4282_state *st, u32 pin, u32 func, b
 	 * function is only given once.
 	 */
 	if (*adc_in)
-		return dev_err_probe(st->dev, -EINVAL,
+		return dev_err_probe(dev, -EINVAL,
 				     "Only one gpio can be given to the ADC input\n");
 
 	*adc_in = true;
 
 	/* setting the bit to 1 cause the ADC to monitor GPIO2 */
-	return regmap_update_bits(st->map, LTC4282_ILIM_ADJUST, LTC4282_GPIO_MODE_MASK,
+	return regmap_update_bits(st->map, LTC4282_ILIM_ADJUST,
+				  LTC4282_GPIO_MODE_MASK,
 				  FIELD_PREP(LTC4282_GPIO_MODE_MASK, pin == LTC4282_GPIO_2));
 }
 
@@ -1128,10 +1401,10 @@ static const char * const ltc4282_gpio_prop[] = {
 	"adi,gpio1-mode", "adi,gpio2-mode", "adi,gpio3-mode"
 };
 
-static int ltc4282_gpio_setup(struct ltc4282_state *st)
+static int ltc4282_gpio_setup(struct ltc4282_state *st, struct device *dev)
 {
-	struct device *dev = st->dev;
-	u32 gpio, func, ngpios = 0;
+	u32 gpio, ngpios = 0;
+	const char *func;
 	bool adc_in = false;
 	int ret;
 
@@ -1139,17 +1412,22 @@ static int ltc4282_gpio_setup(struct ltc4282_state *st)
 		return 0;
 
 	for (gpio = 0; gpio <= LTC4282_GPIO_3; gpio++) {
-		ret = device_property_read_u32(dev, ltc4282_gpio_prop[gpio], &func);
+		ret = device_property_read_string(dev, ltc4282_gpio_prop[gpio],
+						  &func);
 		if (ret)
 			continue;
-		if (func >= ltc4282_gpios[gpio].n_funcs)
-			return dev_err_probe(dev, ret, "Invalid func(%u >= %u) for gpio%u\n",
-					     func, ltc4282_gpios[gpio].n_funcs, gpio + 1);
-		if (func == LTC4282_PIN_GPIO) {
-			st->gpio_map[ngpios++] = gpio;
+		if (match_string(ltc4282_gpios[gpio].funcs,
+				 ltc4282_gpios[gpio].n_funcs, func) < 0)
+			return dev_err_probe(dev, ret,
+					     "Invalid func(%s) for gpio%u\n",
+					     func, gpio + 1);
+		if (!strcmp(func, "gpio")) {
+			__set_bit(gpio, &st->valid_mask);
+			ngpios++;
 			if (gpio == LTC4282_GPIO_1) {
 				/* default to input GPIO */
-				ret = regmap_set_bits(st->map, LTC4282_GPIO_CONFIG,
+				ret = regmap_set_bits(st->map,
+						      LTC4282_GPIO_CONFIG,
 						      LTC4282_GPIO_1_CONFIG_MASK);
 				if (ret)
 					return ret;
@@ -1158,44 +1436,44 @@ static int ltc4282_gpio_setup(struct ltc4282_state *st)
 			continue;
 		}
 
-		ret = ltc4282_non_gpio_setup(st, gpio, func, &adc_in);
+		ret = ltc4282_non_gpio_setup(st, dev, gpio, func, &adc_in);
 		if (ret)
 			return ret;
 	}
 
-	if (device_property_read_bool(dev, "adi,alert-as-gpio"))
-		st->gpio_map[ngpios++] = LTC4282_ALERT;
+	if (device_property_read_bool(dev, "adi,gpio-alert")) {
+		__set_bit(LTC4282_ALERT, &st->valid_mask);
+		ngpios++;
+	}
 
 	if (!ngpios)
 		return 0;
 
 	st->gc.parent = dev;
 	st->gc.base = -1;
-	st->gc.ngpio = ngpios;
+	st->gc.ngpio = 4;
 	st->gc.can_sleep = true;
 	st->gc.label = "ltc4282";
 	st->gc.direction_input = ltc4282_gpio_input_set;
 	st->gc.direction_output = ltc4282_gpio_output_set;
 	st->gc.set = ltc4282_gpio_set;
 	st->gc.get = ltc4282_gpio_get;
+	st->gc.init_valid_mask = ltc4282_gpio_valid_mask;
 
 	return devm_gpiochip_add_data(dev, &st->gc, st);
 }
 
+static const char * const ltc4282_dividers[] = {
+	"external", "vdd_5_percent", "vdd_10_percent", "vdd_15_percent"
+};
+
 /* This maps the Vout full scale for the given Vin mode */
 static const u16 ltc4282_vfs_milli[] = { 5540, 8320, 16640, 33280 };
 
-enum {
-	LTC4282_DIV_EXTERNAL,
-	LTC4282_DIV_5_PERCENT,
-	LTC4282_DIV_10_PERCENT,
-	LTC4282_DIV_15_PERCENT,
-};
-
-static int ltc4282_setup(struct ltc4282_state *st)
+static int ltc4282_setup(struct ltc4282_state *st, struct device *dev)
 {
-	struct device *dev = st->dev;
 	u32 val, curr_lim_uv;
+	const char *divider;
 	int ret;
 
 	/* The part has an eeprom so let's get the needed defaults from it */
@@ -1203,18 +1481,25 @@ static int ltc4282_setup(struct ltc4282_state *st)
 	if (ret)
 		return ret;
 
-	ret = device_property_read_u32(dev, "adi,rsense-nano-ohms", &st->rsense);
+	ret = device_property_read_u32(dev, "adi,rsense-nano-ohms",
+				       &st->rsense);
 	if (ret)
-		return dev_err_probe(dev, ret, "Failed to read adi,rsense-nano-ohms\n");
+		return dev_err_probe(dev, ret,
+				     "Failed to read adi,rsense-nano-ohms\n");
+	if (st->rsense < CENTI)
+		return dev_err_probe(dev, -EINVAL,
+				     "adi,rsense-nano-ohms too small (< %lu)\n",
+				     CENTI);
 
 	/*
-	 * The resolution for rsense is tens of micro which means we need nano in the bindings.
-	 * However, to make things easier to handle (with respect to overflows) we divide it by
-	 * 100 as we don't really need the last two digits.
+	 * The resolution for rsense is tenths of micro (eg: 62.5 uOhm) which
+	 * means we need nano in the bindings. However, to make things easier to
+	 * handle (with respect to overflows) we divide it by 100 as we don't
+	 * really need the last two digits.
 	 */
 	st->rsense /= CENTI;
 
-	ret = device_property_read_u32(dev, "vin-mode-microvolt", &val);
+	ret = device_property_read_u32(dev, "adi,vin-mode-microvolt", &val);
 	if (!ret) {
 		switch (val) {
 		case 3300000:
@@ -1231,16 +1516,19 @@ static int ltc4282_setup(struct ltc4282_state *st)
 			break;
 		default:
 			return dev_err_probe(dev, -EINVAL,
-					     "Invalid val(%u) for vin-mode-microvolt\n", val);
+					     "Invalid val(%u) for vin-mode-microvolt\n",
+					     val);
 		}
 
-		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB,  LTC4282_CTRL_VIN_MODE_MASK,
+		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB,
+					 LTC4282_CTRL_VIN_MODE_MASK,
 					 FIELD_PREP(LTC4282_CTRL_VIN_MODE_MASK, st->vin_mode));
 		if (ret)
 			return ret;
 
 		/* Foldback mode should also be set to the input voltage */
-		ret = regmap_update_bits(st->map, LTC4282_ILIM_ADJUST, LTC4282_FOLDBACK_MODE_MASK,
+		ret = regmap_update_bits(st->map, LTC4282_ILIM_ADJUST,
+					 LTC4282_FOLDBACK_MODE_MASK,
 					 FIELD_PREP(LTC4282_FOLDBACK_MODE_MASK, st->vin_mode));
 		if (ret)
 			return ret;
@@ -1248,7 +1536,7 @@ static int ltc4282_setup(struct ltc4282_state *st)
 
 	st->vfs_out = ltc4282_vfs_milli[st->vin_mode];
 
-	ret = device_property_read_u32(dev, "adi,current-limit-microvolt",
+	ret = device_property_read_u32(dev, "adi,current-limit-sense-microvolt",
 				       &curr_lim_uv);
 	if (!ret) {
 		int reg_val;
@@ -1284,7 +1572,8 @@ static int ltc4282_setup(struct ltc4282_state *st)
 					     val);
 		}
 
-		ret = regmap_update_bits(st->map, LTC4282_ILIM_ADJUST, LTC4282_ILIM_ADJUST_MASK,
+		ret = regmap_update_bits(st->map, LTC4282_ILIM_ADJUST,
+					 LTC4282_ILIM_ADJUST_MASK,
 					 FIELD_PREP(LTC4282_ILIM_ADJUST_MASK, reg_val));
 		if (ret)
 			return ret;
@@ -1294,40 +1583,60 @@ static int ltc4282_setup(struct ltc4282_state *st)
 	if (ret)
 		return ret;
 
-	ret = device_property_read_u32(st->dev, "adi,overvoltage-dividers", &val);
+	ret = device_property_read_string(dev, "adi,overvoltage-dividers",
+					  &divider);
 	if (!ret) {
-		if (val > LTC4282_DIV_15_PERCENT)
-			return dev_err_probe(st->dev, -EINVAL,
-					     "Invalid val(%u) for adi,overvoltage-divider\n", val);
+		int div = match_string(ltc4282_dividers,
+				       ARRAY_SIZE(ltc4282_dividers), divider);
+		if (div < 0)
+			return dev_err_probe(dev, -EINVAL,
+					     "Invalid val(%s) for adi,overvoltage-divider\n",
+					     divider);
 
-		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB, LTC4282_CTRL_OV_MODE_MASK,
-					 FIELD_PREP(LTC4282_CTRL_OV_MODE_MASK, val));
+		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB,
+					 LTC4282_CTRL_OV_MODE_MASK,
+					 FIELD_PREP(LTC4282_CTRL_OV_MODE_MASK, div));
 	}
 
-	ret = device_property_read_u32(st->dev, "adi,undervoltage-dividers", &val);
+	ret = device_property_read_string(dev, "adi,undervoltage-dividers",
+					  &divider);
 	if (!ret) {
-		if (val > LTC4282_DIV_15_PERCENT)
-			return dev_err_probe(st->dev, -EINVAL,
-					     "Invalid val(%u) for adi,undervoltage-divider\n", val);
+		int div = match_string(ltc4282_dividers,
+				       ARRAY_SIZE(ltc4282_dividers), divider);
+		if (div < 0)
+			return dev_err_probe(dev, -EINVAL,
+					     "Invalid val(%s) for adi,undervoltage-divider\n",
+					     divider);
 
-		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB, LTC4282_CTRL_UV_MODE_MASK,
-					 FIELD_PREP(LTC4282_CTRL_UV_MODE_MASK, val));
+		ret = regmap_update_bits(st->map, LTC4282_CTRL_MSB,
+					 LTC4282_CTRL_UV_MODE_MASK,
+					 FIELD_PREP(LTC4282_CTRL_UV_MODE_MASK, div));
 	}
 
 	if (device_property_read_bool(dev, "adi,overcurrent-retry")) {
-		ret = regmap_set_bits(st->map, LTC4282_CTRL_LSB, LTC4282_CTRL_OC_RETRY_MASK);
+		ret = regmap_set_bits(st->map, LTC4282_CTRL_LSB,
+				      LTC4282_CTRL_OC_RETRY_MASK);
 		if (ret)
 			return ret;
 	}
 
 	if (device_property_read_bool(dev, "adi,overvoltage-retry-disable")) {
-		ret = regmap_clear_bits(st->map, LTC4282_CTRL_LSB, LTC4282_CTRL_OV_RETRY_MASK);
+		ret = regmap_clear_bits(st->map, LTC4282_CTRL_LSB,
+					LTC4282_CTRL_OV_RETRY_MASK);
 		if (ret)
 			return ret;
 	}
 
 	if (device_property_read_bool(dev, "adi,undervoltage-retry-disable")) {
-		ret = regmap_clear_bits(st->map, LTC4282_CTRL_LSB, LTC4282_CTRL_UV_RETRY_MASK);
+		ret = regmap_clear_bits(st->map, LTC4282_CTRL_LSB,
+					LTC4282_CTRL_UV_RETRY_MASK);
+		if (ret)
+			return ret;
+	}
+
+	if (device_property_read_bool(dev, "adi,fault-log-enable")) {
+		ret = regmap_set_bits(st->map, LTC4282_ADC_CTRL,
+				      LTC4282_FAULT_LOG_EN_MASK);
 		if (ret)
 			return ret;
 	}
@@ -1336,14 +1645,15 @@ static int ltc4282_setup(struct ltc4282_state *st)
 	if (!ret) {
 		if (val > LTC4282_FET_BAD_MAX_TIMEOUT)
 			return dev_err_probe(dev, -EINVAL,
-					     "Invalid value(%u) for adi,fet-bad-timeout-ms", val);
+					     "Invalid value(%u) for adi,fet-bad-timeout-ms",
+					     val);
 
 		ret = regmap_write(st->map, LTC4282_FET_BAD_FAULT_TIMEOUT, val);
 		if (ret)
 			return ret;
 	}
 
-	return ltc4282_gpio_setup(st);
+	return ltc4282_gpio_setup(st, dev);
 }
 
 static bool ltc4282_readable_reg(struct device *dev, unsigned int reg)
@@ -1376,9 +1686,13 @@ static const struct hwmon_channel_info * const ltc4282_info[] = {
 	HWMON_CHANNEL_INFO(in,
 			   HWMON_I_INPUT | HWMON_I_LOWEST | HWMON_I_HIGHEST |
 			   HWMON_I_MAX | HWMON_I_MIN | HWMON_I_MIN_ALARM |
-			   HWMON_I_MAX_ALARM | HWMON_I_LABEL,
-			   HWMON_I_INPUT | HWMON_I_LCRIT_ALARM | HWMON_I_CRIT_ALARM |
-			   HWMON_I_LABEL,
+			   HWMON_I_MAX_ALARM | HWMON_I_ENABLE |
+			   HWMON_I_RESET_HISTORY | HWMON_I_LABEL,
+			   HWMON_I_INPUT | HWMON_I_LOWEST | HWMON_I_HIGHEST |
+			   HWMON_I_MAX | HWMON_I_MIN | HWMON_I_MIN_ALARM |
+			   HWMON_I_MAX_ALARM | HWMON_I_LCRIT_ALARM |
+			   HWMON_I_CRIT_ALARM | HWMON_I_ENABLE |
+			   HWMON_I_RESET_HISTORY | HWMON_I_LABEL,
 			   HWMON_I_INPUT | HWMON_I_LOWEST | HWMON_I_HIGHEST |
 			   HWMON_I_MAX | HWMON_I_MIN | HWMON_I_MIN_ALARM |
 			   HWMON_I_MAX_ALARM | HWMON_I_LABEL),
@@ -1386,12 +1700,12 @@ static const struct hwmon_channel_info * const ltc4282_info[] = {
 			   HWMON_C_INPUT | HWMON_C_LOWEST | HWMON_C_HIGHEST |
 			   HWMON_C_MAX | HWMON_C_MIN | HWMON_C_MIN_ALARM |
 			   HWMON_C_MAX_ALARM | HWMON_C_CRIT_ALARM |
-			   HWMON_C_LABEL),
+			   HWMON_I_RESET_HISTORY | HWMON_C_LABEL),
 	HWMON_CHANNEL_INFO(power,
 			   HWMON_P_INPUT | HWMON_P_INPUT_LOWEST |
 			   HWMON_P_INPUT_HIGHEST | HWMON_P_MAX | HWMON_P_MIN |
-			   HWMON_P_AVERAGE | HWMON_P_MAX_ALARM | HWMON_P_MIN_ALARM |
-			   HWMON_P_LABEL),
+			   HWMON_P_MAX_ALARM | HWMON_P_MIN_ALARM |
+			   HWMON_I_RESET_HISTORY | HWMON_P_LABEL),
 	HWMON_CHANNEL_INFO(energy,
 			   HWMON_E_ENABLE),
 	NULL
@@ -1420,40 +1734,94 @@ static SENSOR_DEVICE_ATTR(fet_short_fault, 0444, ltc4282_show_status, NULL,
 static SENSOR_DEVICE_ATTR(fet_bad_fault, 0444, ltc4282_show_status, NULL,
 			  LTC4282_FET_BAD_STATUS_MASK);
 /*
- * Fault log failures. These faults might be important in systems where auto-retry is not enabled
- * since they will cause the part to latch off until they are cleared. Typically that happens
- * when the system admin is close enough so he can check what happened and manually clear the
- * faults. Moreover, manually clearing the faults might only matter when ON_FAULT_MASK in the
- * CONTROL register is set (which is the default) as in that case, a turn off signal from the
- * ON pin won't clear them.
+ * Fault log failures. These faults might be important in systems where
+ * auto-retry is not enabled since they will cause the part to latch off until
+ * they are cleared. Typically that happens when the system admin is close
+ * enough so he can check what happened and manually clear the faults. Hence, we
+ * provide an attribute to clear all fauls at once while still capable of
+ * checking individual faults in debugs.
  */
-static SENSOR_DEVICE_ATTR(in1_crit_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_OV_FAULT_MASK);
-static SENSOR_DEVICE_ATTR(in1_lcrit_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_UV_FAULT_MASK);
-static SENSOR_DEVICE_ATTR(curr1_crit_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_OC_FAULT_MASK);
-static SENSOR_DEVICE_ATTR(power1_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_POWER_BAD_FAULT_MASK);
-static SENSOR_DEVICE_ATTR(fet_bad_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_FET_BAD_FAULT_MASK);
-static SENSOR_DEVICE_ATTR(fet_short_fault_log, 0644, ltc4282_show_fault_log,
-			  ltc4282_clear_fault_log, LTC4282_FET_SHORT_FAULT_MASK);
+static SENSOR_DEVICE_ATTR(fault_logs_reset, 0644, NULL, ltc4282_clear_faults,
+			  0);
 
 static struct attribute *ltc4282_attrs[] = {
 	&sensor_dev_attr_energy1_input.dev_attr.attr,
 	&sensor_dev_attr_power1_good.dev_attr.attr,
 	&sensor_dev_attr_fet_bad_fault.dev_attr.attr,
 	&sensor_dev_attr_fet_short_fault.dev_attr.attr,
-	&sensor_dev_attr_in1_crit_fault_log.dev_attr.attr,
-	&sensor_dev_attr_in1_lcrit_fault_log.dev_attr.attr,
-	&sensor_dev_attr_curr1_crit_fault_log.dev_attr.attr,
-	&sensor_dev_attr_power1_fault_log.dev_attr.attr,
-	&sensor_dev_attr_fet_bad_fault_log.dev_attr.attr,
-	&sensor_dev_attr_fet_short_fault_log.dev_attr.attr,
+	&sensor_dev_attr_fault_logs_reset.dev_attr.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(ltc4282);
+
+#define LTC4282_DEBUGFS_FAULT_LOG(_name, _mask)					\
+static int ltc4282_show_##_name##_fault_log(void *arg, u64 *val)		\
+{										\
+	struct ltc4282_state *st = arg;						\
+	long alarm;								\
+	int ret;								\
+										\
+	ret = ltc4282_read_alarm(st, LTC4282_FAULT_LOG,	_mask, &alarm);		\
+	if (ret)								\
+		return ret;							\
+										\
+	*val = alarm;								\
+										\
+	return 0;								\
+}										\
+DEFINE_DEBUGFS_ATTRIBUTE(ltc4282_##_name##_fault_log,				\
+			 ltc4282_show_##_name##_fault_log, NULL, "%llu\n")
+
+LTC4282_DEBUGFS_FAULT_LOG(curr1_crit, LTC4282_OC_FAULT_MASK);
+LTC4282_DEBUGFS_FAULT_LOG(in1_lcrit, LTC4282_UV_FAULT_MASK);
+LTC4282_DEBUGFS_FAULT_LOG(in1_crit, LTC4282_OV_FAULT_MASK);
+LTC4282_DEBUGFS_FAULT_LOG(fet_bad, LTC4282_FET_BAD_FAULT_MASK);
+LTC4282_DEBUGFS_FAULT_LOG(fet_short, LTC4282_FET_SHORT_FAULT_MASK);
+LTC4282_DEBUGFS_FAULT_LOG(power1, LTC4282_POWER_BAD_FAULT_MASK);
+
+static void ltc4282_debugfs_remove(void *dir)
+{
+	debugfs_remove_recursive(dir);
+}
+
+static void ltc4282_debugfs_init(struct ltc4282_state *st,
+				 struct i2c_client *i2c,
+				 const struct device *hwmon)
+{
+	const char *debugfs_name;
+	struct dentry *dentry;
+	int ret;
+
+	if (!IS_ENABLED(CONFIG_DEBUG_FS))
+		return;
+
+	debugfs_name = devm_kasprintf(&i2c->dev, GFP_KERNEL, "%s-%s",
+				      i2c->name, dev_name(hwmon));
+	if (!debugfs_name)
+		return;
+
+	dentry = debugfs_create_dir(debugfs_name, NULL);
+	if (IS_ERR(dentry))
+		return;
+
+	ret = devm_add_action_or_reset(&i2c->dev, ltc4282_debugfs_remove,
+				       dentry);
+	if (ret)
+		return;
+
+	debugfs_create_file_unsafe("power1_fault_log", 0400, dentry, st,
+				   &ltc4282_power1_fault_log);
+	debugfs_create_file_unsafe("fet_short_fault_log", 0400, dentry, st,
+				   &ltc4282_fet_short_fault_log);
+	debugfs_create_file_unsafe("fet_bad_fault_log", 0400, dentry, st,
+				   &ltc4282_fet_bad_fault_log);
+	debugfs_create_file_unsafe("in1_crit_fault_log", 0400, dentry, st,
+				   &ltc4282_in1_crit_fault_log);
+	debugfs_create_file_unsafe("in1_lcrit_fault_log", 0400, dentry, st,
+				   &ltc4282_in1_lcrit_fault_log);
+	debugfs_create_file_unsafe("curr1_crit_fault_log", 0400, dentry, st,
+				   &ltc4282_curr1_crit_fault_log);
+}
 
 static int ltc4282_probe(struct i2c_client *i2c)
 {
@@ -1461,18 +1829,17 @@ static int ltc4282_probe(struct i2c_client *i2c)
 	struct ltc4282_state *st;
 	int ret;
 
+	dev_info(&i2c->dev, "Probe me...\n");
+
 	st = devm_kzalloc(dev, sizeof(*st), GFP_KERNEL);
 	if (!st)
-		return dev_err_probe(dev, -ENOMEM, "Failed to allocate memory\n");
+		return dev_err_probe(dev, -ENOMEM,
+				     "Failed to allocate memory\n");
 
-	st->dev = dev;
 	st->map = devm_regmap_init_i2c(i2c, &ltc4282_regmap_config);
 	if (IS_ERR(st->map))
-		return dev_err_probe(dev, PTR_ERR(st->map), "failed regmap init\n");
-
-	ret = ltc4282_power_on(st);
-	if (ret)
-		return ret;
+		return dev_err_probe(dev, PTR_ERR(st->map),
+				     "failed regmap init\n");
 
 	/* Soft reset */
 	ret = regmap_set_bits(st->map, LTC4282_ADC_CTRL, LTC4282_RESET_MASK);
@@ -1481,18 +1848,24 @@ static int ltc4282_probe(struct i2c_client *i2c)
 
 	msleep(3200);
 
-	ret = ltc428_clks_setup(st);
+	ret = ltc428_clks_setup(st, dev);
 	if (ret)
 		return ret;
 
-	ret = ltc4282_setup(st);
+	ret = ltc4282_setup(st, dev);
 	if (ret)
 		return ret;
 
 	mutex_init(&st->lock);
-	hwmon = devm_hwmon_device_register_with_info(dev, "ltc4282", st, &ltc2947_chip_info,
+	hwmon = devm_hwmon_device_register_with_info(dev, "ltc4282", st,
+						     &ltc2947_chip_info,
 						     ltc4282_groups);
-	return PTR_ERR_OR_ZERO(hwmon);
+	if (IS_ERR(hwmon))
+		return PTR_ERR(hwmon);
+
+	ltc4282_debugfs_init(st, i2c, hwmon);
+
+	return 0;
 }
 
 static const struct of_device_id ltc4282_of_match[] = {

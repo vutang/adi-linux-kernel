@@ -1,0 +1,26 @@
+v2:
+
+- driver
+ * Add Docs to index.rst 
+ * Removed ltc4282_power_on() - Not very reasonable to enable/disable an hot swap from the driver
+ * Removed struct device *dev parameter from struct ltc4282_state
+ * Error out for rsense-nano-ohms < 100
+ * Return 0 on .is_visible() - not a negative error 
+ * Moved to 80 column limit
+ * Replace ENOTSUPP with EOPNOTSUPP
+ * Remove Power Average (Should be done in userspace) - With it, no
+need for handling energy + tick overflows
+ * Return 0 instead of 'ret' in ltc4282_read_energy()
+ * Add adi prefix to 'vin-mode-microvolt'
+ * Changed 'adi,current-limit-microvolt' to 'adi,current-limit-sense-microvolt' so
+it's clear the device expects volts to be configured
+ * Moved fault logs to debugfs while adding a new interface to clear all faults in
+one write
+ * Keep historic alarms in ltc4282_read_alarm()
+ * Cache energy status so we don't have to read it from the device on every energy
+value read
+ * Use enable attributes to switch between VDD - VSOURCE.
+ * Support reset_history.
+ * Sync with bindings - use strings properties
+
+
