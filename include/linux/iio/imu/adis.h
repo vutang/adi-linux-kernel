@@ -133,6 +133,7 @@ struct adis {
 
 	u8			tx[10] ____cacheline_aligned;
 	u8			rx[4];
+	u8			*adis_burst_request;
 };
 
 int adis_init(struct adis *adis, struct iio_dev *indio_dev,
@@ -532,6 +533,12 @@ int
 devm_adis_setup_buffer_and_trigger(struct adis *adis, struct iio_dev *indio_dev,
 				   irq_handler_t trigger_handler);
 
+int
+devm_adis_setup_buffer_and_trigger_with_fifo(struct adis *adis, struct iio_dev *indio_dev,
+					     irq_handler_t trigger_handler,
+					     const struct iio_buffer_setup_ops *ops,
+					     const struct attribute **buffer_attrs);
+
 int devm_adis_probe_trigger(struct adis *adis, struct iio_dev *indio_dev);
 
 int adis_update_scan_mode(struct iio_dev *indio_dev,
@@ -542,6 +549,15 @@ int adis_update_scan_mode(struct iio_dev *indio_dev,
 static inline int
 devm_adis_setup_buffer_and_trigger(struct adis *adis, struct iio_dev *indio_dev,
 				   irq_handler_t trigger_handler)
+{
+	return 0;
+}
+
+static inline int
+devm_adis_setup_buffer_and_trigger_with_fifo(struct adis *adis, struct iio_dev *indio_dev,
+					     irq_handler_t trigger_handler,
+					     const struct iio_buffer_setup_ops *ops,
+					     const struct attribute **buffer_attrs)
 {
 	return 0;
 }

@@ -14,6 +14,7 @@
 #include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/imu/adis.h>
+#include <linux/iio/sysfs.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/irq.h>
 #include <linux/lcm.h>
@@ -78,6 +79,21 @@
 #define ADIS16475_LSB_FIR_MASK		BIT(1)
 #define ADIS16500_BURST_DATA_SEL_0_CHN_MASK	GENMASK(5, 0)
 #define ADIS16500_BURST_DATA_SEL_1_CHN_MASK	GENMASK(12, 7)
+#define ADIS16475_MAX_FIFO_WM		511
+#define ADIS16475_REG_FIFO_CTRL		0x5A
+#define ADIS16475_WM_LVL_MASK		GENMASK(15, 4)
+#define ADIS16475_WM_LVL(x)		FIELD_PREP(ADIS16475_WM_LVL_MASK, x)
+#define ADIS16475_WM_POL_MASK		BIT(3)
+#define ADIS16475_WM_POL(x)		FIELD_PREP(ADIS16475_WM_POL_MASK, x)
+#define ADIS16475_WM_EN_MASK		BIT(2)
+#define ADIS16475_WM_EN(x)		FIELD_PREP(ADIS16475_WM_EN_MASK, x)
+#define ADIS16475_OVERFLOW_MASK		BIT(1)
+#define ADIS16475_STOP_ENQUEUE		FIELD_PREP(ADIS16475_OVERFLOW_MASK, 0)
+#define ADIS16475_OVERWRITE_OLDEST	FIELD_PREP(ADIS16475_OVERFLOW_MASK, 1)
+#define ADIS16475_FIFO_EN_MASK		BIT(0)
+#define ADIS16475_FIFO_EN(x)		FIELD_PREP(ADIS16475_FIFO_EN_MASK, x)
+#define ADIS16475_FIFO_FLUSH_CMD	BIT(5)
+#define ADIS16475_REG_FIFO_CNT		0x3C
 
 enum {
 	ADIS16475_SYNC_DIRECT = 1,
@@ -102,6 +118,7 @@ struct adis16475_chip_info {
 #define ADIS16475_HAS_SYNC_4KHZ		BIT(2)
 #define ADIS16475_HAS_TIMESTAMP32	BIT(3)
 #define ADIS16475_NEEDS_BURST_REQUEST	BIT(4)
+#define ADIS16475_HAS_FIFO		BIT(5)
 	const long flags;
 	u32 num_channels;
 	u32 gyro_max_val;
@@ -125,6 +142,9 @@ struct adis16475 {
 	u16 sync_mode;
 	/* Alignment needed for the timestamp */
 	__be16 data[ADIS16475_MAX_SCAN_DATA] __aligned(8);
+	u16 fifo_watermark;
+	bool fifo_en;
+	u8 burst_request[2];
 };
 
 enum {
@@ -452,6 +472,114 @@ static int adis16475_set_filter(struct adis16475 *st, const u32 filter)
 	 * bits on the LSB registers. This info is used on the trigger handler.
 	 */
 	assign_bit(ADIS16475_LSB_FIR_MASK, &st->lsb_flag, i);
+
+	return 0;
+}
+
+static ssize_t adis16475_get_fifo_enabled(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct adis16475 *st = iio_priv(indio_dev);
+
+	return sprintf(buf, "%d\n", st->fifo_en);
+}
+
+static ssize_t adis16475_get_fifo_watermark(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct adis16475 *st = iio_priv(indio_dev);
+
+	return sprintf(buf, "%d\n", st->fifo_watermark);
+}
+
+static ssize_t hwfifo_watermark_min_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	return sysfs_emit(buf, "%s\n", "1");
+}
+
+static ssize_t hwfifo_watermark_max_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	return sysfs_emit(buf, "%s\n", __stringify(ADIS16475_MAX_FIFO_WM));
+}
+
+static IIO_DEVICE_ATTR_RO(hwfifo_watermark_min, 0);
+static IIO_DEVICE_ATTR_RO(hwfifo_watermark_max, 0);
+static IIO_DEVICE_ATTR(hwfifo_watermark, 0444,
+		       adis16475_get_fifo_watermark, NULL, 0);
+static IIO_DEVICE_ATTR(hwfifo_enabled, 0444,
+		       adis16475_get_fifo_enabled, NULL, 0);
+
+static const struct attribute *adis16475_fifo_attributes[] = {
+	&iio_dev_attr_hwfifo_watermark_min.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark_max.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark.dev_attr.attr,
+	&iio_dev_attr_hwfifo_enabled.dev_attr.attr,
+	NULL,
+};
+
+static int adis16475_buffer_postenable(struct iio_dev *indio_dev)
+{
+	struct adis16475 *st = iio_priv(indio_dev);
+	struct adis *adis = &st->adis;
+	int ret;
+	u16 val;
+
+	/* Update watermark, enable watermark interrupt and update overflow behavior. */
+	val = ADIS16475_WM_LVL(st->fifo_watermark);
+	ret = adis_update_bits(adis, ADIS16475_REG_FIFO_CTRL, ADIS16475_WM_LVL_MASK, val);
+	if (ret)
+		return ret;
+
+	/* Enable fifo. */
+	val = ADIS16475_FIFO_EN(1);
+	ret = adis_update_bits(adis, ADIS16475_REG_FIFO_CTRL, ADIS16475_FIFO_EN_MASK, val);
+	if (ret)
+		return ret;
+
+	st->fifo_en = 1;
+	return 0;
+}
+
+static int adis16475_buffer_postdisable(struct iio_dev *indio_dev)
+{
+	struct adis16475 *st = iio_priv(indio_dev);
+	struct adis *adis = &st->adis;
+	int ret;
+	u16 val;
+
+	/* Disable fifo. */
+	val = ADIS16475_FIFO_EN(0);
+	ret = adis_update_bits(adis, ADIS16475_REG_FIFO_CTRL, ADIS16475_FIFO_EN_MASK, val);
+	if (ret)
+		return ret;
+	st->fifo_en = 0;
+
+	/* Flush fifo contents. */
+	return adis_write_reg_16(adis, ADIS16475_REG_GLOB_CMD,
+				ADIS16475_FIFO_FLUSH_CMD);
+}
+
+static const struct iio_buffer_setup_ops adis16475_buffer_ops = {
+	.postenable = adis16475_buffer_postenable,
+	.postdisable = adis16475_buffer_postdisable,
+};
+
+static int adis16475_set_watermark(struct iio_dev *indio_dev, unsigned int val)
+{
+	struct adis16475 *st  = iio_priv(indio_dev);
+
+	if (val > ADIS16475_MAX_FIFO_WM)
+		val = ADIS16475_MAX_FIFO_WM;
+
+	st->fifo_watermark = val;
 
 	return 0;
 }
@@ -1160,7 +1288,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16575, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 	[ADIS16575_3] = {
@@ -1178,7 +1306,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16575, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 	[ADIS16576_2] = {
@@ -1196,7 +1324,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16576, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 	[ADIS16576_3] = {
@@ -1214,7 +1342,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16576, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 	[ADIS16577_2] = {
@@ -1232,7 +1360,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16577, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 	[ADIS16577_3] = {
@@ -1250,7 +1378,7 @@ static const struct adis16475_chip_info adis16475_chip_info[] = {
 		.max_dec = 3999,
 		.sync = adis16575_sync_mode,
 		.num_sync = ARRAY_SIZE(adis16575_sync_mode),
-		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ,
+		.flags = ADIS16475_HAS_BURST32 | ADIS16475_HAS_BURST_DELTA_DATA | ADIS16475_NEEDS_BURST_REQUEST | ADIS16475_HAS_TIMESTAMP32 | ADIS16475_HAS_SYNC_4KHZ | ADIS16475_HAS_FIFO,
 		.adis_data = ADIS16475_DATA(16577, &adis1650x_timeouts, ADIS16575_BURST32_MAX_DATA, ADIS16575_BURST_MAX_SPEED),
 	},
 };
@@ -1285,6 +1413,7 @@ static const struct iio_info adis16475_info = {
 	.write_raw = &adis16475_write_raw,
 	.update_scan_mode = adis16475_update_scan_mode,
 	.debugfs_reg_access = adis_debugfs_reg_access,
+	.hwfifo_set_watermark = adis16475_set_watermark,
 };
 
 static bool adis16475_validate_crc(const u8 *buffer, u16 crc,
@@ -1345,9 +1474,8 @@ static void adis16475_burst32_check(struct adis16475 *st)
 	}
 }
 
-static irqreturn_t adis16475_trigger_handler(int irq, void *p)
+static int adis16475_push_single_sample(struct iio_poll_func *pf)
 {
-	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct adis16475 *st = iio_priv(indio_dev);
 	struct adis *adis = &st->adis;
@@ -1378,9 +1506,11 @@ static irqreturn_t adis16475_trigger_handler(int irq, void *p)
 			if (((u8 *)adis->buffer)[idx])
 				break;
 
-		if (idx == burst_size)
+		if (idx == burst_size) {
 			/* First spi transaction was a request, sample data on next interrupt */
+			ret = -EAGAIN;
 			goto check_burst32;
+		}
 	}
 
 	buffer = adis->buffer;
@@ -1458,6 +1588,51 @@ check_burst32:
 	 * array.
 	 */
 	adis16475_burst32_check(st);
+
+	return ret;
+}
+
+static irqreturn_t adis16475_trigger_handler(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+
+	adis16475_push_single_sample(pf);
+	iio_trigger_notify_done(indio_dev->trig);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t adis16475_trigger_handler_with_fifo(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct adis16475 *st = iio_priv(indio_dev);
+	struct adis *adis = &st->adis;
+	int ret;
+	u16 fifo_cnt, i;
+
+	ret = adis_read_reg_16(adis, ADIS16475_REG_FIFO_CNT, &fifo_cnt);
+	if (ret || fifo_cnt < 2)
+		goto err;
+
+	if (fifo_cnt > st->fifo_watermark)
+		fifo_cnt = st->fifo_watermark;
+
+	for (i = 0; i < fifo_cnt - 1; i++) {
+		ret = adis16475_push_single_sample(pf);
+		if (ret == -EAGAIN)
+			adis16475_push_single_sample(pf);
+	}
+
+	/* last transfer with no fifo pop request  */
+	st->burst_request[0] = 0;
+	st->burst_request[1] = 0;
+	adis16475_push_single_sample(pf);
+	st->burst_request[0] = 0x68;
+	st->burst_request[1] = 0;
+
+err:
 	iio_trigger_notify_done(indio_dev->trig);
 
 	return IRQ_HANDLED;
@@ -1594,7 +1769,23 @@ static int adis16475_config_irq_pin(struct adis16475 *st)
 	 */
 	usleep_range(250, 260);
 
-	return 0;
+	/*
+	 * If the device has FIFO support, configure the watermark polarity
+	 * pin as well.
+	 */
+	if (st->info->flags & ADIS16475_HAS_FIFO) {
+		val = ADIS16475_WM_POL(polarity);
+		ret = adis_update_bits(&st->adis, ADIS16475_REG_FIFO_CTRL,
+				       ADIS16475_WM_POL_MASK, val);
+		if (ret)
+			return ret;
+
+		/* Enable watermark interrupt pin. */
+		val = ADIS16475_WM_EN(1);
+		ret = adis_update_bits(&st->adis, ADIS16475_REG_FIFO_CTRL, ADIS16475_WM_EN_MASK, val);
+	}
+
+	return ret;
 }
 
 static const struct of_device_id adis16475_of_match[] = {
@@ -1694,8 +1885,24 @@ static int adis16475_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	ret = devm_adis_setup_buffer_and_trigger(&st->adis, indio_dev,
-						 adis16475_trigger_handler);
+	if (st->info->flags & ADIS16475_HAS_FIFO) {
+		st->burst_request[0] = 0x68;
+		st->burst_request[1] = 0;
+		st->adis.adis_burst_request = st->burst_request;
+		ret = devm_adis_setup_buffer_and_trigger_with_fifo(&st->adis, indio_dev,
+								   adis16475_trigger_handler_with_fifo,
+								   &adis16475_buffer_ops,
+								   adis16475_fifo_attributes);
+		if (ret)
+			return ret;
+		/* Update overflow behavior to always overwrite the oldest sample. */
+		u16 val = ADIS16475_OVERWRITE_OLDEST;
+
+		ret = adis_update_bits(&st->adis, ADIS16475_REG_FIFO_CTRL, ADIS16475_OVERFLOW_MASK, val);
+	} else {
+		ret = devm_adis_setup_buffer_and_trigger(&st->adis, indio_dev,
+							 adis16475_trigger_handler);
+	}
 	if (ret)
 		return ret;
 

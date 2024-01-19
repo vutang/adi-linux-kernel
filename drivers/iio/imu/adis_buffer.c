@@ -24,7 +24,7 @@ static int adis_update_scan_mode_burst(struct iio_dev *indio_dev,
 {
 	struct adis *adis = iio_device_get_drvdata(indio_dev);
 	unsigned int burst_length, burst_max_length;
-	u8 *tx;
+
 
 	burst_length = adis->data->burst_len + adis->burst_extra_len;
 
@@ -43,12 +43,15 @@ static int adis_update_scan_mode_burst(struct iio_dev *indio_dev,
 		adis->xfer = NULL;
 		return -ENOMEM;
 	}
+	if (!adis->adis_burst_request) {
+		u8 *tx = adis->buffer + burst_max_length;
 
-	tx = adis->buffer + burst_max_length;
-	tx[0] = ADIS_READ_REG(adis->data->burst_reg_cmd);
-	tx[1] = 0;
-
-	adis->xfer[0].tx_buf = tx;
+		tx[0] = ADIS_READ_REG(adis->data->burst_reg_cmd);
+		tx[1] = 0;
+		adis->xfer[0].tx_buf = tx;
+	} else {
+		adis->xfer[0].tx_buf = adis->adis_burst_request;
+	}
 	adis->xfer[0].bits_per_word = 8;
 	adis->xfer[0].len = 2;
 	if (adis->data->burst_max_speed_hz)
@@ -214,3 +217,48 @@ devm_adis_setup_buffer_and_trigger(struct adis *adis, struct iio_dev *indio_dev,
 }
 EXPORT_SYMBOL_NS_GPL(devm_adis_setup_buffer_and_trigger, IIO_ADISLIB);
 
+/**
+ * devm_adis_setup_buffer_and_trigger_with_fifo() - Sets up buffer and trigger
+ * for the managed adis device with FIFO support.
+ * @adis: The adis device
+ * @indio_dev: The IIO device
+ * @trigger_handler: Trigger handler: should handle the FIFO readings.
+ * @ops: Optional buffer setup functions, may be NULL.
+ * @buffer_attrs: Extra buffer attributes for FIFO handling.
+ *
+ * Returns 0 on success, a negative error code otherwise.
+ *
+ * This function sets up the buffer (with buffer setup functions and extra
+ * buffer attributes) and trigger for a adis devices with FIFO support. The
+ * trigger_handler should not be NULL and it should handle the FIFO readings.
+ */
+int
+devm_adis_setup_buffer_and_trigger_with_fifo(struct adis *adis, struct iio_dev *indio_dev,
+					     irq_handler_t trigger_handler,
+					     const struct iio_buffer_setup_ops *ops,
+					     const struct attribute **buffer_attrs)
+{
+	int ret;
+
+	if (!trigger_handler)
+		return -EINVAL;
+
+	ret = devm_iio_triggered_buffer_setup_ext(&adis->spi->dev, indio_dev,
+						  &iio_pollfunc_store_time,
+						  trigger_handler,
+						  IIO_BUFFER_DIRECTION_IN,
+						  ops,
+						  buffer_attrs);
+	if (ret)
+		return ret;
+
+	if (adis->spi->irq) {
+		ret = devm_adis_probe_trigger(adis, indio_dev);
+		if (ret)
+			return ret;
+	}
+
+	return devm_add_action_or_reset(&adis->spi->dev, adis_buffer_cleanup,
+					adis);
+}
+EXPORT_SYMBOL_NS_GPL(devm_adis_setup_buffer_and_trigger_with_fifo, IIO_ADISLIB);
