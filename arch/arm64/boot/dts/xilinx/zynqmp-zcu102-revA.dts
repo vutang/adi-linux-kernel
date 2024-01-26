@@ -621,7 +621,7 @@
 
 				si5328_clk: clk0@0 {
 					reg = <0>;
-					clock-frequency = <27000000>;
+					clock-frequency = <245760000>;
 				};
 			};
 		};
