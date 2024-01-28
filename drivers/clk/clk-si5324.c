@@ -1171,6 +1171,7 @@ static int si5324_i2c_probe(struct i2c_client *client,
 				dev_err(&client->dev, "Cannot set rate : %d\n",
 					ret);
 			}
+			printk("Set clckout[%d] to %dHz\n", n, pdata->clkout[n].rate);
 		}
 	}
 
