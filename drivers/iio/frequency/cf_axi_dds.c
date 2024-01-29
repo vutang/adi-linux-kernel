@@ -2416,6 +2416,7 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 	if (info && !info->rate_format_skip_en)
 		dds_write(st, ADI_REG_CNTRL_2, ctrl_2);
 
+	printk("cf_axi_dds_datasel: DATA_SEL_DMA\n");
 	cf_axi_dds_datasel(st, -1, DATA_SEL_DMA);
 
 	if (!st->dp_disable) {
