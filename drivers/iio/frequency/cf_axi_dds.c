@@ -2416,7 +2416,7 @@ static int cf_axi_dds_probe(struct platform_device *pdev)
 	if (info && !info->rate_format_skip_en)
 		dds_write(st, ADI_REG_CNTRL_2, ctrl_2);
 
-	cf_axi_dds_datasel(st, -1, DATA_SEL_DDS);
+	cf_axi_dds_datasel(st, -1, DATA_SEL_DMA);
 
 	if (!st->dp_disable) {
 		u32 scale, frequency, phase, i, skip_attrib = 0;
