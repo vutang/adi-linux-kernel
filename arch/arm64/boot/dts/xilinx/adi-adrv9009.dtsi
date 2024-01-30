@@ -277,7 +277,7 @@
 		adi,tx-profile-rf-bandwidth_hz = <225000000>;
 		adi,tx-profile-tx-dac3d-bcorner_khz = <225000>;
 		adi,tx-profile-tx-bbf3d-bcorner_khz = <113000>;
-		adi,tx-profile-loop-back-adc-profile = /bits/ 16 <212, 140, 175, 90, 1280, 699, 1304, 59, 1343, 33, 913, 27, 48, 48, 34, 192, 0, 0, 0, 0, 48, 0, 7, 6, 42, 0, 7, 6, 42, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 31, 905>;
+		adi,tx-profile-loop-back-adc-profile = /bits/ 16 <212 140 175 90 1280 699 1304 59 1343 33 913 27 48 48 34 192 0 0 0 0 48 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
 
 		adi,tx-settings-deframer-sel = <0>;
 		adi,tx-settings-tx-channels = <3>;
