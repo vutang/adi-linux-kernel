@@ -242,7 +242,7 @@
 		adi,orx-profile-orx-output-rate_khz = <245760>;
 		adi,orx-profile-rf-bandwidth_hz = <200000000>;
 		adi,orx-profile-rx-bbf3d-bcorner_khz = <225000>;
-		adi,orx-profile-orx-low-pass-adc-profile = /bits/ 16  <185, 141, 172, 90, 1280, 942, 1332, 90, 1368, 46, 1016, 19, 48, 48, 37, 208, 0, 0, 0, 0, 52, 0, 7, 6, 42, 0, 7, 6, 42, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 31, 905>;
+		adi,orx-profile-orx-low-pass-adc-profile = /bits/ 16  <185 141 172 90 1280 942 1332 90 1368 46 1016 19 48 48 37 208 0 0 0 0 52 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
 		adi,orx-profile-orx-band-pass-adc-profile = /bits/ 16  <0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0>;
 		adi,orx-profile-orx-ddc-mode = <0>;
 		adi,orx-profile-orx-merge-filter = /bits/ 16  <0 0 0 0 0 0 0 0 0 0 0 0>;
