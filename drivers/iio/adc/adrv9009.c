@@ -5503,7 +5503,7 @@ static int adrv9009_jesd204_link_init(struct jesd204_dev *jdev,
 	taliseJesd204bDeframerConfig_t *deframer = NULL;
 	bool orx_adc_stitching_enabled;
 
-	dev_dbg(dev, "%s:%d link_num %u reason %s\n", __func__, __LINE__,
+	dev_info(dev, "%s:%d link_num %u reason %s\n", __func__, __LINE__,
 		lnk->link_id, jesd204_state_op_reason_str(reason));
 
 	switch (reason) {
