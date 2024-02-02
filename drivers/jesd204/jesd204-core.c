@@ -191,6 +191,8 @@ int jesd204_link_get_rate(struct jesd204_link *lnk, u64 *lane_rate_hz)
 
 	*lane_rate_hz = rate;
 
+	printk("%s: lane_rate_hz %d\n", __func__, rate)
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(jesd204_link_get_rate);
@@ -246,6 +248,8 @@ int jesd204_link_get_device_clock(struct jesd204_link *lnk,
 	do_div(lane_rate_hz, encoding_n);
 
 	*device_clock = lane_rate_hz;
+
+	printk("%d: device_clock %d\n", __func__, lane_rate_hz)
 
 	return ret;
 }
