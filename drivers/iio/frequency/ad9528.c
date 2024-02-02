@@ -30,6 +30,8 @@
 #include <linux/jesd204/jesd204.h>
 #include <dt-bindings/iio/frequency/ad9528.h>
 
+#define DEBUG
+
 #define AD9528_READ	(1 << 15)
 #define AD9528_WRITE	(0 << 15)
 #define AD9528_CNT(x)	(((x) - 1) << 13)

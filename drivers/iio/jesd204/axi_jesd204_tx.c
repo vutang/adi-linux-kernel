@@ -26,6 +26,8 @@
 
 #include "axi_jesd204.h"
 
+#define DEBUG
+
 #define JESD204_TX_REG_MAGIC			0x0c
 
 #define JESD204_TX_REG_CONF_NUM_LANES		0x10

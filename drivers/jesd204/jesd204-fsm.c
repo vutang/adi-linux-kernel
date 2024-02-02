@@ -16,6 +16,8 @@
 
 #define EINVALID_STATE		9000
 
+#define DEBUG
+
 typedef int (*jesd204_fsm_cb)(struct jesd204_dev *jdev,
 			      struct jesd204_dev_con_out *con,
 			      unsigned int link_idx,

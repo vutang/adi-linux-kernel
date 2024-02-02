@@ -16,6 +16,8 @@
 
 #include "jesd204-priv.h"
 
+#define DEBUG
+
 /* IDA to assign each registered device a unique id */
 static DEFINE_IDA(jesd204_ida);
 
