@@ -669,6 +669,8 @@ static int axi_jesd204_tx_jesd204_link_pre_setup(struct jesd204_dev *jdev,
 		return ret;
 	}
 
+	printk("%s: clk_set_rate lane_clk to %d", __func__, lane_rate);
+
 	return JESD204_STATE_CHANGE_DONE;
 }
 
@@ -879,6 +881,7 @@ static int axi_jesd204_tx_probe(struct platform_device *pdev)
 	int irq;
 	int ret;
 	u32 tmp;
+	int clk_rate;
 
 	if (!pdev->dev.of_node)
 		return -ENODEV;
@@ -924,6 +927,9 @@ static int axi_jesd204_tx_probe(struct platform_device *pdev)
 	if (IS_ERR(jesd->lane_clk))
 		return PTR_ERR(jesd->lane_clk);
 
+	clk_rate = clk_get_rate(jesd->lane_clk);
+	printk("%s: clk_set_rate lane_clk to %d\n", __func__, clk_rate);
+
 	/*
 	 * Optional CPLL/QPLL REFCLK from a difference source
 	 * which rate and state must be in sync with the main conv clk
@@ -938,9 +944,15 @@ static int axi_jesd204_tx_probe(struct platform_device *pdev)
 	if (IS_ERR(jesd->link_clk))
 		return PTR_ERR(jesd->link_clk);
 
+	clk_rate = clk_get_rate(jesd->link_clk);
+	printk("%s: clk_set_rate link_clk to %d\n", __func__, clk_rate);
+
 	jesd->sysref_clk = devm_clk_get_optional(&pdev->dev, "sysref_clk");
 	if (IS_ERR(jesd->sysref_clk))
 		return PTR_ERR(jesd->sysref_clk);
+
+	clk_rate = clk_get_rate(jesd->sysref_clk);
+	printk("%s: clk_set_rate sysref_clk to %d\n", __func__, clk_rate);
 
 	ret = clk_prepare_enable(jesd->axi_clk);
 	if (ret)
