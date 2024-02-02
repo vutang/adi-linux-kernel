@@ -893,6 +893,8 @@ static int axi_jesd204_tx_probe(struct platform_device *pdev)
 	if (!pdev->dev.of_node)
 		return -ENODEV;
 
+	dev_info(&pdev->dev, "%s : enter", __func__);
+
 	jdev = devm_jesd204_dev_register(&pdev->dev,
 					 &jesd204_axi_jesd204_tx_init);
 	if (IS_ERR(jdev))

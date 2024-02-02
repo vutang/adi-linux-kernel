@@ -890,6 +890,8 @@ static int jesd204_dev_init_links_data(struct device *parent,
 		return -EINVAL;
 	}
 
+	printk("%s vx\n", __func__);
+
 	jesd204_info(jdev, "%s: vx\n", __func__);
 
 	/**
@@ -943,6 +945,7 @@ static struct jesd204_dev *jesd204_dev_register(struct device *dev,
 	}
 
 	dev_info(dev, "%s\n", __func__);
+	printk("%s\n", __func__);
 
 	jdev = jesd204_dev_from_device(dev);
 	if (jdev) {
@@ -1067,6 +1070,8 @@ struct jesd204_dev *devm_jesd204_dev_register(struct device *dev,
 					      const struct jesd204_dev_data *i)
 {
 	struct jesd204_dev **jdevp, *jdev;
+
+	printk("%s\n", __func__);
 
 	if (!dev_is_jesd204_dev(dev))
 		return NULL;
