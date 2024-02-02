@@ -208,7 +208,7 @@ int jesd204_link_get_rate_khz(struct jesd204_link *lnk,
 		return ret;
 
 	*lane_rate_khz = DIV_ROUND_CLOSEST_ULL(lane_rate_hz, 1000);
-
+	printk("%s: lane_rate_hz %d\n", __func__, *lane_rate_khz);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(jesd204_link_get_rate_khz);
@@ -249,7 +249,7 @@ int jesd204_link_get_device_clock(struct jesd204_link *lnk,
 
 	*device_clock = lane_rate_hz;
 
-	printk("%d: device_clock %d\n", __func__, lane_rate_hz);
+	printk("%s: device_clock %d\n", __func__, lane_rate_hz);
 
 	return ret;
 }
@@ -330,6 +330,8 @@ int jesd204_link_get_lmfc_lemc_rate(struct jesd204_link *lnk,
 			lnk->frames_per_multiframe);
 		break;
 	}
+
+	printk("%s: lane_rate_hz %d\n", __func__, lane_rate_hz);
 
 	*rate_hz = lane_rate_hz;
 
