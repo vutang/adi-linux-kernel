@@ -919,8 +919,8 @@ static int axi_jesd204_tx_probe(struct platform_device *pdev)
 	if (IS_ERR(jesd->axi_clk))
 		return PTR_ERR(jesd->axi_clk);
 
-	clk_rate = clk_get_rate(jesd->s_axi_aclk);
-	printk("%s: clk_get_rate s_axi_aclk to %d\n", __func__, clk_rate);
+	clk_rate = clk_get_rate(jesd->axi_clk);
+	printk("%s: clk_get_rate axi_clk to %d\n", __func__, clk_rate);
 
 	jesd->device_clk = devm_clk_get(&pdev->dev, "device_clk");
 	if (IS_ERR(jesd->device_clk))
