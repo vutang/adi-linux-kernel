@@ -383,6 +383,8 @@ static int axi_clkgen_set_rate(struct clk_hw *clk_hw,
 	if (parent_rate == 0 || rate == 0)
 		return -EINVAL;
 
+	printk("%s: set rate %d\n", __func__, rate);
+
 	axi_clkgen_calc_params(parent_rate, rate, &d, &m, &dout);
 
 	if (d == 0 || dout == 0 || m == 0)
