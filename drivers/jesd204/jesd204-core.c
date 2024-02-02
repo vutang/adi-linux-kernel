@@ -942,7 +942,7 @@ static struct jesd204_dev *jesd204_dev_register(struct device *dev,
 		return ERR_PTR(-EINVAL);
 	}
 
-	dev_info(dev, "%s\n", __func__)
+	dev_info(dev, "%s\n", __func__);
 
 	jdev = jesd204_dev_from_device(dev);
 	if (jdev) {
