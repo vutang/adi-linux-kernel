@@ -607,7 +607,7 @@ static int axi_clkgen_probe(struct platform_device *pdev)
 		init.num_parents++;
 
 		clk_rate = clk_get_rate(axi_clkgen->parent_clocks[i]);
-		printk("clk-axi-clkgen: %s with rate %d\n", parent_names[i], clk_rate);
+		printk("clk-axi-clkgen/%s: parent[%d] %s with rate %d\n", __func__, i, parent_names[i], clk_rate);
 	}
 
 	if (init.num_parents < 1) {
