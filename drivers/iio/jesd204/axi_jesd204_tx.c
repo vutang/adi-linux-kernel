@@ -595,7 +595,7 @@ static int axi_jesd204_tx_jesd204_link_pre_setup(struct jesd204_dev *jdev,
 	dev_info(dev, 
 		"JESD Link: ID %d, sample_rate %ld, sample_rate_div %d, num_lanes %d, num_converters %d, bits_per_sample %d, jesd_encoder %d\n", 
 		lnk->link_id, lnk->sample_rate, lnk->sample_rate_div, lnk->num_lanes, lnk->num_converters,\
-		lnk->bits_per_sample, lnk->jesd204_encoder);
+		lnk->bits_per_sample, lnk->jesd_encoder);
 
 	ret = jesd204_link_get_device_clock(lnk, &link_rate);
 	dev_info(dev, "%s: Link%u device clock rate %lu (%d)\n",
