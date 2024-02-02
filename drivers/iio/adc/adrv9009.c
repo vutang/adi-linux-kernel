@@ -57,6 +57,8 @@
 
 #include <dt-bindings/iio/adc/adi,adrv9009.h>
 
+#define DEBUG
+
 #define FIRMWARE	"TaliseTDDArmFirmware.bin"
 #define FIRMWARE_TX	"TaliseTxArmFirmware.bin"
 #define FIRMWARE_RX	"TaliseRxArmFirmware.bin"
@@ -5585,6 +5587,12 @@ static int adrv9009_jesd204_link_init(struct jesd204_dev *jdev,
 			JESD204_SUBCLASS_1 : JESD204_SUBCLASS_0;
 		lnk->is_transmit = true;
 	};
+
+	dev_info(dev, 
+		"JESD Link: ID %d, sample_rate %ld, sample_rate_div %d, num_lanes %d, num_converters %d, bits_per_sample %d, jesd_encoder %d\n", 
+		lnk->link_id, lnk->sample_rate, lnk->sample_rate_div, lnk->num_lanes, lnk->num_converters,\
+		lnk->bits_per_sample, lnk->jesd_encoder);
+
 
 	return JESD204_STATE_CHANGE_DONE;
 }

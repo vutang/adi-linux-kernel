@@ -890,6 +890,8 @@ static int jesd204_dev_init_links_data(struct device *parent,
 		return -EINVAL;
 	}
 
+	jesd204_info(jdev, "%s: vx\n", __func__);
+
 	/**
 	 * Framework users should provide at least initial JESD204 link data,
 	 * or a link init op/callback which should do JESD204 link init.
@@ -939,6 +941,8 @@ static struct jesd204_dev *jesd204_dev_register(struct device *dev,
 		dev_err(dev, "Invalid register arguments\n");
 		return ERR_PTR(-EINVAL);
 	}
+
+	dev_info(dev, "%s\n", __func__)
 
 	jdev = jesd204_dev_from_device(dev);
 	if (jdev) {
