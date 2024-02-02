@@ -556,6 +556,7 @@ static int axi_clkgen_probe(struct platform_device *pdev)
 	struct resource *mem;
 	unsigned int i;
 	int ret;
+	int clk_rate;
 
 	if (!pdev->dev.of_node)
 		return -ENODEV;
@@ -602,6 +603,9 @@ static int axi_clkgen_probe(struct platform_device *pdev)
 
 		parent_names[i] = __clk_get_name(axi_clkgen->parent_clocks[i]);
 		init.num_parents++;
+
+		clk_rate = clk_gen_rate(axi_clkgen->parent_clocks[i]);
+		printk("clk-axi-clkgen: %s with rate %d\n", parent_names[i], clk_rate)
 	}
 
 	if (init.num_parents < 1) {
