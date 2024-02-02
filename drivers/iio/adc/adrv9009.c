@@ -5515,6 +5515,7 @@ static int adrv9009_jesd204_link_init(struct jesd204_dev *jdev,
 
 	switch (lnk->link_id) {
 	case DEFRAMER_LINK_TX:
+		dev_info(dev, "link->sample_rate: %d\n", phy->talInit.tx.txProfile.txInputRate_kHz);
 		deframer = &phy->talInit.jesd204Settings.deframerA;
 		lnk->sample_rate = phy->talInit.tx.txProfile.txInputRate_kHz * 1000;
 		priv->link[DEFRAMER_LINK_TX].source_id = TAL_DEFRAMER_A;

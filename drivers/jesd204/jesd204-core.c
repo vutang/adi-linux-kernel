@@ -890,8 +890,6 @@ static int jesd204_dev_init_links_data(struct device *parent,
 		return -EINVAL;
 	}
 
-	printk("%s vx\n", __func__);
-
 	jesd204_info(jdev, "%s: vx\n", __func__);
 
 	/**
