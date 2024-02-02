@@ -103,7 +103,7 @@ static unsigned long axi_jesd204_tx_calc_device_clk(struct axi_jesd204_tx *jesd,
 	if (jesd->version >= ADI_AXI_PCORE_VER(1, 6, 'a'))
 		return div_u64((u64) link_rate * jesd->data_path_width,
 			jesd->tpl_data_path_width);
-	printk("%s: link_rate %d\n", __func__, link_rate)
+	printk("%s: link_rate %d\n", __func__, link_rate);
 	return link_rate;
 }
 
