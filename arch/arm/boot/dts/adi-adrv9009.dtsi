@@ -134,11 +134,11 @@
 		adi,jesd204-framer-a-lane0-id = <0>;
 		adi,jesd204-framer-a-m = <4>;
 		adi,jesd204-framer-a-k = <32>;
-		adi,jesd204-framer-a-f = <4>;
+		adi,jesd204-framer-a-f = <8>;
 		adi,jesd204-framer-a-np = <16>;
 		adi,jesd204-framer-a-scramble = <1>;
 		adi,jesd204-framer-a-external-sysref = <1>;
-		adi,jesd204-framer-a-serializer-lanes-enabled = <0x03>;
+		adi,jesd204-framer-a-serializer-lanes-enabled = <0x01>;
 		adi,jesd204-framer-a-serializer-lane-crossbar = <0xE4>;
 		adi,jesd204-framer-a-lmfc-offset = <31>;
 		adi,jesd204-framer-a-new-sysref-on-relink = <0>;
@@ -154,11 +154,11 @@
 		adi,jesd204-framer-b-lane0-id = <0>;
 		adi,jesd204-framer-b-m = <2>;
 		adi,jesd204-framer-b-k = <32>;
-		adi,jesd204-framer-b-f = <4>;
+		adi,jesd204-framer-b-f = <2>;
 		adi,jesd204-framer-b-np = <16>;
 		adi,jesd204-framer-b-scramble = <1>;
 		adi,jesd204-framer-b-external-sysref = <1>;
-		adi,jesd204-framer-b-serializer-lanes-enabled = <0x0C>;
+		adi,jesd204-framer-b-serializer-lanes-enabled = <0x06>;
 		adi,jesd204-framer-b-serializer-lane-crossbar = <0xE4>;
 		adi,jesd204-framer-b-lmfc-offset = <31>;
 		adi,jesd204-framer-b-new-sysref-on-relink = <0>;
@@ -199,8 +199,8 @@
 		/* RX */
 
 		adi,rx-profile-rx-fir-gain_db = <(-6)>;
-		adi,rx-profile-rx-fir-num-fir-coefs = <48>;
-		adi,rx-profile-rx-fir-coefs = /bits/ 16 <(-8) (-22) (32) (50) (-68) (-106) (141) (199) (-258) (-352) (430) (572) (-691) (-903) (1069) (1392) (-1644) (-2172) (2569) (3574) (-4364) (-7129) (9355) (31095) (31095) (9355) (-7129) (-4364) (3574) (2569) (-2172) (-1644) (1392) (1069) (-903) (-691) (572) (430) (-352) (-258) (199) (141) (-106) (-68) (50) (32) (-22) (-8)>;
+		adi,rx-profile-rx-fir-num-fir-coefs = <72>;
+		adi,rx-profile-rx-fir-coefs = /bits/ 16 <(0) (0) (2) (0) (-7) (-1) (15) (4) (-31) (-10) (57) (23) (-99) (-47) (161) (86) (-247) (-146) (372) (238) (-542) (-381) (762) (583) (-1064) (-883) (1470) (1331) (-2057) (-2059) (2975) (3403) (-4748) (-6898) (9698) (30806) (30806) (9698) (-6898) (-4748) (3403) (2975) (-2059) (-2057) (1331) (1470) (-883) (-1064) (583) (762) (-381) (-542) (238) (372) (-146) (-247) (86) (161) (-47) (-99) (23) (57) (-10) (-31) (4) (15) (-1) (-7) (0) (2) (0) (0)>;
 
 		adi,rx-profile-rx-fir-decimation = <2>;
 		adi,rx-profile-rx-dec5-decimation = <4>;
@@ -208,7 +208,7 @@
 		adi,rx-profile-rx-output-rate_khz = <122880>;
 		adi,rx-profile-rf-bandwidth_hz = <100000000>;
 		adi,rx-profile-rx-bbf3d-bcorner_khz = <100000>;
-		adi,rx-profile-rx-adc-profile = /bits/ 16 <265 146 181 90 1280 366 1257 27 1258 17 718 39 48 46 27 161 0 0 0 0 40 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
+		adi,rx-profile-rx-adc-profile = /bits/ 16 <265, 146, 181, 90, 1280, 366, 1257, 27, 1258, 17, 718, 39, 48, 46, 27, 161, 0, 0, 0, 0, 40, 0, 7, 6, 42, 0, 7, 6, 42, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 31, 905>;
 		adi,rx-profile-rx-ddc-mode = <0>;
 
 		adi,rx-nco-shifter-band-a-input-band-width_khz = <0>;
@@ -233,19 +233,19 @@
 
 		/* ORX */
 
-		adi,orx-profile-rx-fir-gain_db = <(-6)>;
-		adi,orx-profile-rx-fir-num-fir-coefs = <48>;
-		adi,orx-profile-rx-fir-coefs = /bits/ 16  <(-9) (-18) (31) (42) (-65) (-89) (132) (168) (-240) (-298) (396) (486) (-632) (-770) (968) (1163) (-1530) (-1862) (2369) (3051) (-4066) (-5983) (9689) (29830) (29830) (9689) (-5983) (-4066) (3051) (2369) (-1862) (-1530) (1163) (968) (-770) (-632) (486) (396) (-298) (-240) (168) (132) (-89) (-65) (42) (31) (-18) (-9)>;
-		adi,orx-profile-rx-fir-decimation = <2>;
+		adi,orx-profile-rx-fir-gain_db = <6>;
+		adi,orx-profile-rx-fir-num-fir-coefs = <24>;
+		adi,orx-profile-rx-fir-coefs = /bits/ 16  <(-15) (9) (-13) (19) (-28) (38) (-73) (110) (-195) (409) (-1006) (17711) (-1006) (409) (-195) (110) (-73) (38) (-28) (19) (-13) (9) (-15) (0)>;
+		adi,orx-profile-rx-fir-decimation = <1>;
 		adi,orx-profile-rx-dec5-decimation = <4>;
-		adi,orx-profile-rhb1-decimation = <2>;
-		adi,orx-profile-orx-output-rate_khz = <122880>;
-		adi,orx-profile-rf-bandwidth_hz = <100000000>;
+		adi,orx-profile-rhb1-decimation = <1>;
+		adi,orx-profile-orx-output-rate_khz = <491520>;
+		adi,orx-profile-rf-bandwidth_hz = <450000000>;
 		adi,orx-profile-rx-bbf3d-bcorner_khz = <225000>;
-		adi,orx-profile-orx-low-pass-adc-profile = /bits/ 16  <265 146 181 90 1280 366 1257 27 1258 17 718 39 48 46 27 161 0 0 0 0 40 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
-		adi,orx-profile-orx-band-pass-adc-profile = /bits/ 16  <265 146 181 90 1280 366 1257 27 1258 17 718 39 48 46 27 161 0 0 0 0 40 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
+		adi,orx-profile-orx-low-pass-adc-profile = /bits/ 16  <155, 163, 181, 90, 1280, 1254, 1572, 340, 1431, 142, 973, 8, 48, 47, 36, 205, 0, 0, 0, 0, 51, 0, 0, 6, 24, 0, 0, 6, 24, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 15, 905>;
+		adi,orx-profile-orx-band-pass-adc-profile = /bits/ 16  <124, 131, 154, 90, 1280, 2779, 1986, 0, 1037, 839, 988, 109, 11, 15, 28, 179, 0, 0, 0, 0, 45, 0, 0, 0, 24, 0, 0, 0, 24, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 15, 905>;
 		adi,orx-profile-orx-ddc-mode = <0>;
-		adi,orx-profile-orx-merge-filter = /bits/ 16  <0 0 0 0 0 0 0 0 0 0 0 0>;
+		adi,orx-profile-orx-merge-filter = /bits/ 16  <(-167) (419) (-208) (-498) (968) (-320) (-1273) (2154) (-402) (-4155) (9170) (21413)>;
 
 		adi,orx-gain-control-gain-mode = <0>;
 		adi,orx-gain-control-orx1-gain-index = <255>;
@@ -256,39 +256,39 @@
 		adi,orx-gain-control-orx2-min-gain-index = <195>;
 
 		adi,obs-settings-framer-sel = <1>;
-		adi,obs-settings-obs-rx-channels-enable = <3>;
+		adi,obs-settings-obs-rx-channels-enable = <1>;
 		adi,obs-settings-obs-rx-lo-source = <0>;
 
 		/* TX */
 
 		adi,tx-profile-tx-fir-gain_db = <6>;
-		adi,tx-profile-tx-fir-num-fir-coefs = <80>;
-		adi,tx-profile-tx-fir-coefs = /bits/ 16  <(0) (0) (0) (1) (0) (-3) (1) (7) (-3) (-13) (7) (25) (-14) (-42) (27) (69) (-46) (-107) (74) (160) (-115) (-229) (184) (336) (-264) (-468) (382) (653) (-538) (-904) (754) (1269) (-1056) (-1842) (1486) (2879) (-2031) (-4846) (3816) (16221) (16221) (3816) (-4846) (-2031) (2879) (1486) (-1842) (-1056) (1269) (754) (-904) (-538) (653) (382) (-468) (-264) (336) (184) (-229) (-115) (160) (74) (-107) (-46) (69) (27) (-42) (-14) (25) (7) (-13) (-3) (7) (1) (-3) (0) (1) (0) (0) (0)>;
+		adi,tx-profile-tx-fir-num-fir-coefs = <20>;
+		adi,tx-profile-tx-fir-coefs = /bits/ 16  <(-39) (24) (-62) (112) (-175) (298) (-574) (1284) (-2814) (20281) (-2814) (1284) (-574) (298) (-175) (112) (-62) (24) (-39) (0)>;
 
 		adi,tx-profile-dac-div = <1>;
 
-		adi,tx-profile-tx-fir-interpolation = <2>;
+		adi,tx-profile-tx-fir-interpolation = <1>;
 		adi,tx-profile-thb1-interpolation = <2>;
 		adi,tx-profile-thb2-interpolation = <2>;
-		adi,tx-profile-thb3-interpolation = <2>;
+		adi,tx-profile-thb3-interpolation = <1>;
 		adi,tx-profile-tx-int5-interpolation = <1>;
-		adi,tx-profile-tx-input-rate_khz = <122880>;
-		adi,tx-profile-primary-sig-bandwidth_hz = <50000000>;
-		adi,tx-profile-rf-bandwidth_hz = <100000000>;
-		adi,tx-profile-tx-dac3d-bcorner_khz = <187000>;
-		adi,tx-profile-tx-bbf3d-bcorner_khz = <56000>;
-		adi,tx-profile-loop-back-adc-profile = /bits/ 16 <265 146 181 90 1280 366 1257 27 1258 17 718 39 48 46 27 161 0 0 0 0 40 0 7 6 42 0 7 6 42 0 25 27 0 0 25 27 0 0 165 44 31 905>;
+		adi,tx-profile-tx-input-rate_khz = <491520>;
+		adi,tx-profile-primary-sig-bandwidth_hz = <200000000>;
+		adi,tx-profile-rf-bandwidth_hz = <450000000>;
+		adi,tx-profile-tx-dac3d-bcorner_khz = <450000>;
+		adi,tx-profile-tx-bbf3d-bcorner_khz = <225000>;
+		adi,tx-profile-loop-back-adc-profile = /bits/ 16 <150, 178, 181, 90, 1280, 1338, 1699, 493, 1386, 162, 934, 4, 48, 46, 35, 201, 0, 0, 0, 0, 50, 0, 0, 6, 24, 0, 0, 6, 24, 0, 25, 27, 0, 0, 25, 27, 0, 0, 165, 44, 15, 905>;
 
 		adi,tx-settings-deframer-sel = <0>;
 		adi,tx-settings-tx-channels = <3>;
 		adi,tx-settings-tx-atten-step-size = <0>;
-		adi,tx-settings-tx1-atten_md-b = <10000>;
-		adi,tx-settings-tx2-atten_md-b = <10000>;
-		adi,tx-settings-dis-tx-data-if-pll-unlock = <0>;
+		adi,tx-settings-tx1-atten_md-b = <0>;
+		adi,tx-settings-tx2-atten_md-b = <0>;
+		adi,tx-settings-dis-tx-data-if-pll-unlock = <2>;
 
 		/* Clocks */
 
-		adi,dig-clocks-device-clock_khz = <122880>;
+		adi,dig-clocks-device-clock_khz = <245760>;
 		adi,dig-clocks-clk-pll-vco-freq_khz = <9830400>;
 		adi,dig-clocks-clk-pll-hs-div = <1>;
 		adi,dig-clocks-rf-pll-use-external-lo = <0>;
