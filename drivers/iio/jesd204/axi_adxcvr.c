@@ -20,6 +20,8 @@
 #include "xilinx_transceiver.h"
 #include "axi_adxcvr_eyescan.h"
 
+#define DEBUG
+
 static const char *const adxcvr_sys_clock_sel_names[] = {
 	"CPLL", "UNDEF", "QPLL1", "QPLL"
 };

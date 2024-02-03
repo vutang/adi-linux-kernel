@@ -627,6 +627,9 @@ static int axi_jesd204_tx_jesd204_link_pre_setup(struct jesd204_dev *jdev,
 		return ret;
 	}
 
+	printk("%s: clk_set_rate device_clk to %d", __func__, device_rate);
+
+
 	if (!IS_ERR(jesd->link_clk)) {
 		ret = clk_set_rate(jesd->link_clk, link_rate);
 		if (ret) {
