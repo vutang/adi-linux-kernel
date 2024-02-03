@@ -618,7 +618,7 @@ static int axi_jesd204_tx_jesd204_link_pre_setup(struct jesd204_dev *jdev,
 	device_rate = axi_jesd204_tx_calc_device_clk(jesd, link_rate);
 
 	rate = clk_get_rate(jesd->device_clk);
-	printk("%s: current device clock rate %d\n", __func__, rate)
+	printk("%s: current device clock rate %d\n", __func__, rate);
 
 	ret = clk_set_rate(jesd->device_clk, device_rate);
 	if (ret) {
