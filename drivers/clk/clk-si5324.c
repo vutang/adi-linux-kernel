@@ -583,6 +583,8 @@ static const struct clk_ops si5324_clkin_ops = {
 static int si5324_pll_reparent(struct si5324_driver_data *drvdata,
 			       int num, enum si5324_pll_src parent)
 {
+	int val = (int) parent;
+	printk("%s: si5324_pll_src %d\n", __func__, val);
 	if (parent == SI5324_PLL_SRC_XTAL) {
 		si5324_set_bits(drvdata, SI5324_CONTROL,
 				SI5324_CONTROL_FREE_RUN,
@@ -860,6 +862,7 @@ static int si5324_dt_parse(struct i2c_client *client)
 
 	if (!np)
 		return 0;
+	printk("%s: ...\n", __func__);
 
 	pdata = devm_kzalloc(&client->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
