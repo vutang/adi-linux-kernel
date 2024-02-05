@@ -870,6 +870,9 @@ static int si5324_dt_parse(struct i2c_client *client)
 	 * allow to selectively set pll source
 	 */
 	of_property_for_each_u32(np, "silabs,pll-source", prop, p, num) {
+
+		dev_info(&client->dev, "Found silabs,pll-source in device tree\n");
+
 		if (num >= 1) {
 			dev_err(&client->dev,
 				"invalid pll %d on pll-source prop\n", num);
@@ -881,6 +884,8 @@ static int si5324_dt_parse(struct i2c_client *client)
 				"missing pll-source for pll %d\n", num);
 			return -EINVAL;
 		}
+
+		dev_info(&client->dev, "Found silabs,pll-source val %d\n", val);
 
 		switch (val) {
 		case 0:
