@@ -27,6 +27,8 @@
 #include "si5324.h"
 #include "si5324drv.h"
 
+#define DEBUG
+
 struct si5324_driver_data;
 
 /**

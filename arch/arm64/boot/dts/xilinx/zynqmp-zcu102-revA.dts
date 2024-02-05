@@ -618,6 +618,7 @@
 				clocks = <&refhdmi>;
 				clock-names = "xtal";
 				clock-output-names = "si5328";
+				silabs,pll-source = <0 1>;
 
 				si5328_clk: clk0@0 {
 					reg = <0>;
