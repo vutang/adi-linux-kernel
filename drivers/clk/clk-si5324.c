@@ -616,6 +616,7 @@ static int si5324_pll_reparent(struct si5324_driver_data *drvdata,
 
 static unsigned char si5324_pll_get_parent(struct clk_hw *hw)
 {
+	printk("%s\n", __func__);
 	return 0;
 }
 
@@ -634,6 +635,8 @@ static int si5324_pll_set_parent(struct clk_hw *hw, u8 index)
 	struct si5324_hw_data *hwdata =
 		container_of(hw, struct si5324_hw_data, hw);
 	enum si5324_pll_src parent;
+
+	printk("%s\n", __func__);
 
 	if (index == SI5324_SRC_XTAL)
 		parent = SI5324_PLL_SRC_XTAL;
@@ -664,6 +667,8 @@ static unsigned long si5324_pll_recalc_rate(struct clk_hw *hw,
 	struct si5324_hw_data *hwdata =
 		container_of(hw, struct si5324_hw_data, hw);
 
+	printk("%s: parent_rate %d\n", __func__, parent_rate);
+
 	if (!hwdata->drvdata->params.valid)
 		si5324_read_parameters(hwdata->drvdata);
 	WARN_ON(!hwdata->drvdata->params.valid);
@@ -683,12 +688,14 @@ static unsigned long si5324_pll_recalc_rate(struct clk_hw *hw,
 static long si5324_pll_round_rate(struct clk_hw *hw, unsigned long rate,
 				  unsigned long *parent_rate)
 {
+	printk("%s\n", __func__);
 	return rate;
 }
 
 static int si5324_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 			       unsigned long parent_rate)
 {
+	printk("%s\n", __func__);
 	return 0;
 }
 
@@ -709,18 +716,20 @@ static int si5324_clkout_set_drive_strength(
 
 static int si5324_clkout_prepare(struct clk_hw *hw)
 {
+	printk("%s\n", __func__);
 	return 0;
 }
 
 static void si5324_clkout_unprepare(struct clk_hw *hw)
 {
+	printk("%s\n", __func__);
 }
 
 static unsigned long si5324_clkout_recalc_rate(struct clk_hw *hw,
 					       unsigned long parent_rate)
 {
 	unsigned long rate;
-
+	printk("%s\n", __func__);
 	struct si5324_hw_data *hwdata =
 		container_of(hw, struct si5324_hw_data, hw);
 
@@ -747,6 +756,8 @@ static long si5324_clkout_round_rate(struct clk_hw *hw, unsigned long rate,
 	u8 n1_hs, n2_hs, bwsel;
 	int ret;
 
+	printk("%s: rate %d\n", __func__, rate);
+
 	ret = si5324_calcfreqsettings(SI5324_REF_CLOCK, rate, &actual_rate,
 				      &n1_hs, &ncn_ls, &n2_hs, &n2_ls, &n3n,
 				      &bwsel);
@@ -761,6 +772,8 @@ static int si5324_clkout_set_rate(struct clk_hw *hw, unsigned long rate,
 {
 	struct si5324_hw_data *hwdata =
 		container_of(hw, struct si5324_hw_data, hw);
+
+	printk("%s: set rate %d\n", __func__, rate);
 
 	u32 ncn_ls, n2_ls, n3n, actual_rate;
 	u8 n1_hs, n2_hs, bwsel, buf[SI5324_OUT_REGS * 2];
