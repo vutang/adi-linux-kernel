@@ -1194,6 +1194,8 @@ static int si5324_i2c_probe(struct i2c_client *client,
 
 	dev_info(&client->dev, "%s probe successful\n",
 		 si53xx_variant_name[variant]);
+	printk("si5324: SI5324_CONTROL = 0x%x, SI5324_CKSEL = 0x%x", 
+		si5324_reg_read(&drvdata, SI5324_CONTROL), si5324_reg_read(&drvdata, SI5324_CKSEL));
 	instance++;
 	return 0;
 
