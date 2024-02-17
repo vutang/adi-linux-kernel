@@ -1033,6 +1033,9 @@ static int si5324_i2c_probe(struct i2c_client *client,
 		return ret;
 	}
 
+	printk("si5324: SI5324_CONTROL = 0x%x, SI5324_CKSEL = 0x%x\n", 
+		si5324_reg_read(drvdata, SI5324_CONTROL), si5324_reg_read(drvdata, SI5324_CKSEL));
+
 	for (n = 0; n < SI5324_MAX_CLKOUTS; n++) {
 		ret = si5324_clkout_set_drive_strength(drvdata, n,
 						       pdata->clkout[n].drive);
@@ -1194,7 +1197,8 @@ static int si5324_i2c_probe(struct i2c_client *client,
 				dev_err(&client->dev, "Cannot set rate : %d\n",
 					ret);
 			}
-			printk("Set clckout[%d] to %dHz\n", n, pdata->clkout[n].rate);
+			printk("%s: Set clckout[%d] to %dHz\n", __func__,
+					n, pdata->clkout[n].rate);
 		}
 	}
 
@@ -1207,7 +1211,7 @@ static int si5324_i2c_probe(struct i2c_client *client,
 
 	dev_info(&client->dev, "%s probe successful\n",
 		 si53xx_variant_name[variant]);
-	printk("si5324: SI5324_CONTROL = 0x%x, SI5324_CKSEL = 0x%x", 
+	printk("si5324: SI5324_CONTROL = 0x%x, SI5324_CKSEL = 0x%x\n", 
 		si5324_reg_read(drvdata, SI5324_CONTROL), si5324_reg_read(drvdata, SI5324_CKSEL));
 	instance++;
 	return 0;
