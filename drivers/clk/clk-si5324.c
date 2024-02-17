@@ -1209,6 +1209,15 @@ static int si5324_i2c_probe(struct i2c_client *client,
 		goto err_clk;
 	}
 
+	/* setup input clock configuration */
+	ret = si5324_pll_reparent(drvdata, 0, pdata->pll_src);
+	if (ret) {
+		dev_err(&client->dev,
+			"failed to reparent pll to %d\n",
+			pdata->pll_src);
+		return ret;
+	}
+
 	dev_info(&client->dev, "%s probe successful\n",
 		 si53xx_variant_name[variant]);
 	printk("si5324: SI5324_CONTROL = 0x%x, SI5324_CKSEL = 0x%x\n", 
