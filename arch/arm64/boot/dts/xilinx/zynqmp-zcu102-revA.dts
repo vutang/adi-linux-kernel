@@ -596,7 +596,7 @@
 				reg = <0x5d>;
 				temperature-stability = <50>; /* copy from zc702 */
 				factory-fout = <156250000>;
-				clock-frequency = <148500000>;
+				clock-frequency = <245760000>;
 				clock-output-names = "si570_mgt";
 			};
 		};
